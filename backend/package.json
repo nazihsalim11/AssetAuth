@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "cleanup:orphans": "node cleanupOrphans.js",
+    "cleanup:orphans:dry": "node cleanupOrphans.js --dry-run"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

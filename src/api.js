@@ -1,4 +1,17 @@
+import { mockAuthService } from './auth';
+
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+
+// Auth failures that mean the stored session is unusable. The app listens for
+// `assetflow:session-expired` and returns the user to the login screen instead of
+// leaving them clicking a UI that silently 401s.
+const SESSION_DEAD_CODES = new Set(['TOKEN_EXPIRED', 'TOKEN_INVALID', 'AUTH_REQUIRED']);
+
+function handleAuthFailure(code) {
+  if (!SESSION_DEAD_CODES.has(code)) return;
+  mockAuthService.logout();
+  window.dispatchEvent(new CustomEvent('assetflow:session-expired', { detail: { code } }));
+}
 
 // Recursively convert snake_case object/array keys to camelCase
 function snakeToCamel(obj) {
@@ -30,29 +43,84 @@ function camelToSnake(obj) {
 
 // Base Fetch Wrapper
 async function apiFetch(endpoint, options = {}) {
+  const timeoutMs = options.timeout !== undefined ? options.timeout : 30000;
   const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), 3000); // 3s timeout for API readiness check
+  const id = setTimeout(() => {
+    controller.abort(new Error(`Timeout of ${timeoutMs}ms exceeded while calling ${endpoint}`));
+  }, timeoutMs);
+
+  const token = mockAuthService.getToken();
+  const headers = {
+    'Content-Type': 'application/json',
+    ...options.headers,
+  };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const fetchOptions = { ...options };
+  delete fetchOptions.timeout;
 
   try {
     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-      ...options,
+      ...fetchOptions,
       signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
+      headers,
     });
     clearTimeout(id);
     if (!response.ok) {
+      let errMsg = `HTTP ${response.status}`;
+      let errCode;
       const errorText = await response.text();
-      throw new Error(`HTTP ${response.status}: ${errorText || response.statusText}`);
+      try {
+        const errJson = JSON.parse(errorText);
+        errMsg = errJson.error || errJson.message || errMsg;
+        errCode = errJson.code;
+      } catch {
+        if (errorText) errMsg = errorText;
+      }
+      if (response.status === 401) handleAuthFailure(errCode);
+      const err = new Error(errMsg);
+      err.status = response.status;
+      err.code = errCode;
+      throw err;
     }
     const data = await response.json();
     return snakeToCamel(data);
   } catch (err) {
     clearTimeout(id);
-    console.warn(`[AssetFlow API] Connection to ${endpoint} failed. Reverting to local storage.`, err.message);
+    console.error(`[AssetFlow API Error] Request to ${endpoint} failed:`, err);
     throw err;
+  }
+}
+
+const IMPORT_POLL_INTERVAL_MS = 700;
+const IMPORT_MAX_WAIT_MS = 10 * 60 * 1000;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Polls an import job to completion and resolves with its summary. A job that is
+// already finished (because this key was used by an earlier, timed-out attempt)
+// resolves immediately without re-importing anything.
+async function waitForImportJob(job, onProgress) {
+  let current = job;
+  const startedAt = Date.now();
+
+  for (;;) {
+    if (current.status === 'completed') {
+      onProgress?.({ processed: current.total, total: current.total, status: current.status });
+      return current.summary;
+    }
+    if (current.status === 'failed') {
+      throw new Error(current.error || 'The import failed on the server.');
+    }
+    if (Date.now() - startedAt > IMPORT_MAX_WAIT_MS) {
+      throw new Error('The import is taking longer than expected. It is still running on the server — refresh in a moment to see the result.');
+    }
+
+    onProgress?.({ processed: current.processed || 0, total: current.total || 0, status: current.status });
+    await sleep(IMPORT_POLL_INTERVAL_MS);
+    current = await apiFetch(`/import/jobs/${current.jobId}`);
   }
 }
 
@@ -67,11 +135,19 @@ export const api = {
     }
   },
 
+  // Auth Password Flow
+  changePassword: (username, currentPassword, newPassword) => apiFetch('/auth/change-password', { method: 'POST', body: JSON.stringify({ username, currentPassword, newPassword }) }),
+
   // Assets
   getAssets: () => apiFetch('/assets'),
   createAsset: (asset) => apiFetch('/assets', { method: 'POST', body: JSON.stringify(camelToSnake(asset)) }),
   updateAsset: (id, fields) => apiFetch(`/assets/${id}`, { method: 'PATCH', body: JSON.stringify(camelToSnake(fields)) }),
   deleteAsset: (id) => apiFetch(`/assets/${id}`, { method: 'DELETE' }),
+  bulkDeleteAssets: (assetIds) => apiFetch('/assets/bulk/delete', { method: 'POST', body: JSON.stringify({ assetIds }) }),
+  bulkUpdateAssetsStatus: (assetIds, status) => apiFetch('/assets/bulk/status', { method: 'POST', body: JSON.stringify({ assetIds, status }) }),
+  bulkUpdateAssetsCategory: (assetIds, category) => apiFetch('/assets/bulk/category', { method: 'POST', body: JSON.stringify({ assetIds, category }) }),
+  bulkUpdateAssetsLocation: (assetIds, location) => apiFetch('/assets/bulk/location', { method: 'POST', body: JSON.stringify({ assetIds, location }) }),
+  bulkUpdateAssetsDepartment: (assetIds, department) => apiFetch('/assets/bulk/department', { method: 'POST', body: JSON.stringify({ assetIds, department }) }),
 
   // AMCs
   getAmcs: () => apiFetch('/amcs'),
@@ -82,6 +158,17 @@ export const api = {
   getInvoices: () => apiFetch('/invoices'),
   createInvoice: (invoice) => apiFetch('/invoices', { method: 'POST', body: JSON.stringify(camelToSnake(invoice)) }),
   updateInvoice: (id, fields) => apiFetch(`/invoices/${id}`, { method: 'PATCH', body: JSON.stringify(camelToSnake(fields)) }),
+  bulkDeleteInvoices: (invoiceIds) => apiFetch('/invoices/bulk/delete', { method: 'POST', body: JSON.stringify({ invoiceIds }) }),
+  bulkUpdateInvoicesStatus: (invoiceIds, status) => apiFetch('/invoices/bulk/status', { method: 'POST', body: JSON.stringify({ invoiceIds, status }) }),
+  bulkImportInvoices: (invoices) => apiFetch('/invoices/bulk', { method: 'POST', body: JSON.stringify({ invoices: invoices.map(camelToSnake) }) }),
+
+  // Invoice <-> asset mapping. Each returns the resulting { invoiceId, assetIds, assets }
+  // so callers can resync the Invoice and Asset views from a single response.
+  getInvoiceAssets: (invoiceId) => apiFetch(`/invoices/${invoiceId}/assets`),
+  setInvoiceAssets: (invoiceId, assetIds) => apiFetch(`/invoices/${invoiceId}/assets`, { method: 'PUT', body: JSON.stringify({ assetIds }) }),
+  addInvoiceAssets: (invoiceId, assetIds) => apiFetch(`/invoices/${invoiceId}/assets`, { method: 'POST', body: JSON.stringify({ assetIds }) }),
+  removeInvoiceAssets: (invoiceId, assetIds) => apiFetch(`/invoices/${invoiceId}/assets`, { method: 'DELETE', body: JSON.stringify({ assetIds }) }),
+  bulkMapAssetsToInvoice: (invoiceId, assetIds) => apiFetch(`/invoices/${invoiceId}/assets`, { method: 'PUT', body: JSON.stringify({ assetIds }) }),
 
   // Movements
   getMovements: () => apiFetch('/movements'),
@@ -107,6 +194,13 @@ export const api = {
   // Users
   getUsers: () => apiFetch('/users'),
   createUser: (user) => apiFetch('/users', { method: 'POST', body: JSON.stringify(user) }),
+  updateUser: (id, fields) => apiFetch(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(fields) }),
+  deleteUser: (id) => apiFetch(`/users/${id}`, { method: 'DELETE' }),
+  bulkDeleteUsers: (userIds) => apiFetch('/users/bulk/delete', { method: 'POST', body: JSON.stringify({ userIds }) }),
+  bulkUpdateUsersStatus: (userIds, status) => apiFetch('/users/bulk/status', { method: 'POST', body: JSON.stringify({ userIds, status }) }),
+  bulkResetUsersPassword: (userIds) => apiFetch('/users/bulk/reset-password', { method: 'POST', body: JSON.stringify({ userIds }) }),
+  bulkUpdateUsersDepartment: (userIds, department) => apiFetch('/users/bulk/department', { method: 'POST', body: JSON.stringify({ userIds, department }) }),
+  bulkUpdateUsersRole: (userIds, role) => apiFetch('/users/bulk/role', { method: 'POST', body: JSON.stringify({ userIds, role }) }),
 
   // Upload File
   uploadFile: async (file) => {
@@ -128,4 +222,49 @@ export const api = {
       throw err;
     }
   },
+
+  // Bulk Import
+  //
+  // Employee import runs as a background job on the server, so the request no
+  // longer holds the connection open for the duration of the work (which is what
+  // blew the 30s timeout). This starts the job, polls it, and resolves with the
+  // same summary shape the caller has always received.
+  //
+  // `importKey` is an idempotency key: retrying with the same key returns the
+  // original job instead of importing the same employees twice.
+  importEmployees: async (employees, { importKey, onProgress } = {}) => {
+    const job = await apiFetch('/import/employees', {
+      method: 'POST',
+      body: JSON.stringify({ employees, importKey })
+    });
+    return waitForImportJob(job, onProgress);
+  },
+  getImportJob: (jobId) => apiFetch(`/import/jobs/${jobId}`),
+
+  importAssets: (assets) => apiFetch('/import/assets', { method: 'POST', body: JSON.stringify({ assets }) }),
+
+  // Assignments
+  getAssignments: () => apiFetch('/assignments'),
+  createAssignment: (assignment) => apiFetch('/assignments', { method: 'POST', body: JSON.stringify(camelToSnake(assignment)) }),
+  returnAssignment: (id, quantity, notes) => apiFetch(`/assignments/${id}/return`, { method: 'POST', body: JSON.stringify(camelToSnake({ quantity, notes })) }),
+  updateAssignment: (id, fields) => apiFetch(`/assignments/${id}`, { method: 'PATCH', body: JSON.stringify(camelToSnake(fields)) }),
+
+  // Tickets
+  getTickets: () => apiFetch('/tickets'),
+  getTicketById: (id) => apiFetch(`/tickets/${id}`),
+  createTicket: (ticket) => apiFetch('/tickets', { method: 'POST', body: JSON.stringify(camelToSnake(ticket)) }),
+  addTicketComment: (id, commentText, isInternal) => apiFetch(`/tickets/${id}/comments`, { method: 'POST', body: JSON.stringify(camelToSnake({ commentText, isInternal })) }),
+  assignTicket: (id, assignToUserId) => apiFetch(`/tickets/${id}/assign`, { method: 'POST', body: JSON.stringify(camelToSnake({ assignToUserId })) }),
+  updateTicketStatus: (id, status) => apiFetch(`/tickets/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  updateTicketPriority: (id, priority) => apiFetch(`/tickets/${id}/priority`, { method: 'PATCH', body: JSON.stringify({ priority }) }),
+  updateTicketCategory: (id, category) => apiFetch(`/tickets/${id}/category`, { method: 'PATCH', body: JSON.stringify({ category }) }),
+  updateTicketDepartment: (id, department) => apiFetch(`/tickets/${id}/department`, { method: 'PATCH', body: JSON.stringify({ department }) }),
+  bulkUpdateTicketsStatus: (ticketIds, status) => apiFetch('/tickets/bulk/status', { method: 'POST', body: JSON.stringify({ ticketIds, status }) }),
+  bulkUpdateTicketsPriority: (ticketIds, priority) => apiFetch('/tickets/bulk/priority', { method: 'POST', body: JSON.stringify({ ticketIds, priority }) }),
+  bulkUpdateTicketsCategory: (ticketIds, category) => apiFetch('/tickets/bulk/category', { method: 'POST', body: JSON.stringify({ ticketIds, category }) }),
+  bulkUpdateTicketsDepartment: (ticketIds, department) => apiFetch('/tickets/bulk/department', { method: 'POST', body: JSON.stringify({ ticketIds, department }) }),
+  bulkAssignTickets: (ticketIds, assignToUserId) => apiFetch('/tickets/bulk/assign', { method: 'POST', body: JSON.stringify({ ticketIds, assignToUserId }) }),
+  bulkDeleteTickets: (ticketIds) => apiFetch('/tickets/bulk/delete', { method: 'POST', body: JSON.stringify({ ticketIds }) }),
+  autoAssignTicket: (id) => apiFetch(`/tickets/${id}/auto-assign`, { method: 'POST' }),
+  getTicketsAnalytics: () => apiFetch('/tickets-analytics')
 };

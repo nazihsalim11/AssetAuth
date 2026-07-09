@@ -181,11 +181,28 @@ const seedDatabase = async () => {
         { username: "auditor", pass: "Auditor@123", name: "Audit Team", role: "Auditor", email: "auditor@company.com" }
       ];
 
+      const { randomUUID } = require('crypto');
       for (const u of usersToSeed) {
         const hash = await bcrypt.hash(u.pass, 10);
+        const authId = randomUUID();
+
+        // Insert auth record
+        const rawUserMetadata = JSON.stringify({ name: u.name, role: u.role, username: u.username });
+        const authQuery = `
+          INSERT INTO auth.users (
+            id, instance_id, email, encrypted_password, aud, role, 
+            is_sso_user, is_anonymous, email_confirmed_at, 
+            raw_app_meta_data, raw_user_meta_data, created_at, updated_at
+          ) VALUES ($1, '00000000-0000-0000-0000-000000000000', $2, $3, 'authenticated', 'authenticated', 
+                    false, false, NOW(), 
+                    '{"provider":"email","providers":["email"]}'::jsonb, $4::jsonb, NOW(), NOW())
+        `;
+        await db.directQuery(authQuery, [authId, u.email, hash, rawUserMetadata]);
+
+        // Insert public profile
         await db.directQuery(
-          'INSERT INTO users (username, password_hash, name, role, email) VALUES ($1, $2, $3, $4, $5)',
-          [u.username, hash, u.name, u.role, u.email]
+          'INSERT INTO users (username, password_hash, name, role, email, auth_id) VALUES ($1, $2, $3, $4, $5, $6)',
+          [u.username, hash, u.name, u.role, u.email, authId]
         );
       }
       console.log('Users seeded.');
