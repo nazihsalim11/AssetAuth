@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Environment files — never commit these. They hold database passwords and
+# service-role keys. Use .env.example as the template.
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
