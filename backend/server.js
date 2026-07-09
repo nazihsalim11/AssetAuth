@@ -99,15 +99,15 @@ if (!storage.isRemote) {
 // asset_assignments.user_id, not assets.assigned_employee: that column stores a
 // display summary like "Alice Johnson (1)", so matching it against a name never
 // worked. Auth is optional so the unauthenticated connection probe still succeeds.
+// Authentication is required. Making auth optional here meant an employee could see
+// every asset simply by omitting the Authorization header.
 app.get('/api/assets', async (req, res) => {
-  const user = authenticateRequest(req).user;
+  const user = requireUser(req, res);
+  if (!user) return;
   try {
-    const result = user && user.role === 'Employee'
+    const result = isEmployee(user)
       ? await db.query(
-          `SELECT DISTINCT a.* FROM assets a
-           JOIN asset_assignments aa ON aa.asset_id = a.id
-           WHERE aa.user_id = $1 AND aa.status = 'Assigned'
-           ORDER BY a.created_at DESC`,
+          `SELECT * FROM assets WHERE id IN (${EMPLOYEE_ASSET_IDS}) ORDER BY created_at DESC`,
           [user.id]
         )
       : await db.query('SELECT * FROM assets ORDER BY created_at DESC');
@@ -119,6 +119,9 @@ app.get('/api/assets', async (req, res) => {
 });
 
 app.post('/api/assets', async (req, res) => {
+  const actingUser = requireAssetManager(req, res);
+  if (!actingUser) return;
+
   const {
     id, name, serialNumber, category, type, status, cost, purchaseDate,
     warrantyExpiry, department, location, amcId, invoiceId,
@@ -149,6 +152,9 @@ app.post('/api/assets', async (req, res) => {
 });
 
 app.patch('/api/assets/:id', async (req, res) => {
+  const actingUser = requireAssetManager(req, res);
+  if (!actingUser) return;
+
   const { id } = req.params;
   const fields = req.body;
 
@@ -228,6 +234,9 @@ app.patch('/api/assets/:id', async (req, res) => {
 });
 
 app.delete('/api/assets/:id', async (req, res) => {
+  const actingUser = requireAssetManager(req, res);
+  if (!actingUser) return;
+
   const { id } = req.params;
   try {
     const result = await db.query('DELETE FROM assets WHERE id = $1 RETURNING *', [id]);
@@ -241,6 +250,9 @@ app.delete('/api/assets/:id', async (req, res) => {
 
 
 app.post('/api/assets/bulk/delete', async (req, res) => {
+  const actingUser = requireAssetManager(req, res);
+  if (!actingUser) return;
+
   const { assetIds } = req.body;
   if (!Array.isArray(assetIds)) {
     return res.status(400).json({ error: 'Payload must contain an assetIds array' });
@@ -261,6 +273,9 @@ app.post('/api/assets/bulk/delete', async (req, res) => {
 });
 
 app.post('/api/assets/bulk/status', async (req, res) => {
+  const actingUser = requireAssetManager(req, res);
+  if (!actingUser) return;
+
   const { assetIds, status } = req.body;
   if (!Array.isArray(assetIds) || !status) {
     return res.status(400).json({ error: 'Payload must contain assetIds array and status' });
@@ -281,6 +296,9 @@ app.post('/api/assets/bulk/status', async (req, res) => {
 });
 
 app.post('/api/assets/bulk/category', async (req, res) => {
+  const actingUser = requireAssetManager(req, res);
+  if (!actingUser) return;
+
   const { assetIds, category } = req.body;
   if (!Array.isArray(assetIds) || !category) {
     return res.status(400).json({ error: 'Payload must contain assetIds array and category' });
@@ -295,6 +313,9 @@ app.post('/api/assets/bulk/category', async (req, res) => {
 });
 
 app.post('/api/assets/bulk/location', async (req, res) => {
+  const actingUser = requireAssetManager(req, res);
+  if (!actingUser) return;
+
   const { assetIds, location } = req.body;
   if (!Array.isArray(assetIds) || !location) {
     return res.status(400).json({ error: 'Payload must contain assetIds array and location' });
@@ -309,6 +330,9 @@ app.post('/api/assets/bulk/location', async (req, res) => {
 });
 
 app.post('/api/assets/bulk/department', async (req, res) => {
+  const actingUser = requireAssetManager(req, res);
+  if (!actingUser) return;
+
   const { assetIds, department } = req.body;
   if (!Array.isArray(assetIds) || !department) {
     return res.status(400).json({ error: 'Payload must contain assetIds array and department' });
@@ -727,17 +751,30 @@ app.post('/api/invoices/bulk/map-assets', async (req, res) => {
 
 
 // --- MOVEMENTS API ---
+// Movement history names assets and custodians, so it is scoped the same way the
+// directory is: an employee sees only the history of assets they currently hold.
 app.get('/api/movements', async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
   try {
-    const result = await db.query('SELECT * FROM movements ORDER BY date DESC, created_at DESC');
+    const result = isEmployee(user)
+      ? await db.query(
+          `SELECT * FROM movements WHERE asset_id IN (${EMPLOYEE_ASSET_IDS})
+           ORDER BY date DESC, created_at DESC`,
+          [user.id]
+        )
+      : await db.query('SELECT * FROM movements ORDER BY date DESC, created_at DESC');
     res.json(result.rows);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Database query failed' });
+    console.error('GET /api/movements failed:', err);
+    res.status(500).json({ error: 'Database query failed: ' + err.message });
   }
 });
 
 app.post('/api/movements', async (req, res) => {
+  const actingUser = requireAssetManager(req, res);
+  if (!actingUser) return;
+
   const { assetId, date, type, from, to, actor, notes } = req.body;
   const query = `
     INSERT INTO movements (asset_id, date, type, from_loc, to_loc, actor, notes)
@@ -1121,6 +1158,34 @@ const requireUser = (req, res) => {
  * filters on department — those users would otherwise see nothing until their token
  * expired. Falls back to a lookup, so old sessions keep working.
  */
+/* ---------------- Asset visibility ----------------
+ * An Employee is a custodian, not a manager: they may see only the assets currently
+ * assigned to them, and may not create, modify or delete any asset.
+ *
+ * Scoping keys on asset_assignments.user_id — the foreign-keyed truth — not on
+ * assets.assigned_employee, which holds a display summary like "Alice Johnson (1)".
+ */
+
+const isEmployee = (user) => user.role === 'Employee';
+
+// Subquery of the asset ids a given employee currently holds. Used everywhere an
+// asset, movement or assignment is exposed, so one definition governs all of them.
+const EMPLOYEE_ASSET_IDS = `
+  SELECT aa.asset_id FROM asset_assignments aa
+  WHERE aa.user_id = $1 AND aa.status = 'Assigned'
+`;
+
+/** Rejects the request unless the caller may write to asset records. */
+const requireAssetManager = (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return null;
+  if (isEmployee(user)) {
+    res.status(403).json({ error: 'Employees cannot create, modify or delete asset records.' });
+    return null;
+  }
+  return user;
+};
+
 const requireUserWithDepartment = async (req, res) => {
   const user = requireUser(req, res);
   if (!user) return null;
@@ -1691,13 +1756,14 @@ app.post('/api/import/assets', async (req, res) => {
 
 // --- QUANTITY BASED ASSIGNMENT APIS ---
 app.get('/api/assignments', async (req, res) => {
-  const user = authenticateRequest(req).user;
+  const user = requireUser(req, res);
+  if (!user) return;
   try {
     // Inner-joining users as well as assets means a row whose employee or asset
     // has gone away can never surface in the registry, even if one were somehow
     // created outside the ON DELETE CASCADE guarantees.
     // Employees see only their own custody records.
-    const scoped = user && user.role === 'Employee';
+    const scoped = isEmployee(user);
     const result = await db.query(`
       SELECT aa.*, a.name as asset_name, a.category as asset_category
       FROM asset_assignments aa
@@ -1799,6 +1865,9 @@ app.get('/api/employees/:id/assets', async (req, res) => {
 });
 
 app.post('/api/assignments', async (req, res) => {
+  const actingUser = requireAssetManager(req, res);
+  if (!actingUser) return;
+
   const { assetId, employeeName, quantity, department, notes, date } = req.body;
   const qty = parseInt(quantity) || 1;
   const actor = req.headers['x-user-username'] || 'Admin';
@@ -1885,6 +1954,9 @@ app.post('/api/assignments', async (req, res) => {
 });
 
 app.post('/api/assignments/:id/return', async (req, res) => {
+  const actingUser = requireAssetManager(req, res);
+  if (!actingUser) return;
+
   const { id } = req.params;
   const { quantity, notes } = req.body;
   const returnQty = parseInt(quantity) || null;
@@ -1965,6 +2037,9 @@ app.post('/api/assignments/:id/return', async (req, res) => {
 });
 
 app.patch('/api/assignments/:id', async (req, res) => {
+  const actingUser = requireAssetManager(req, res);
+  if (!actingUser) return;
+
   const { id } = req.params;
   const { quantity, employeeName, department, notes } = req.body;
   const actor = req.headers['x-user-username'] || 'Admin';
