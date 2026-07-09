@@ -5,6 +5,7 @@ import { jsPDF } from 'jspdf'
 import * as XLSX from 'xlsx'
 import { silk } from './engine/motion'
 import { openStoredFile } from './files'
+import Modal from './Modal'
 import NotificationSettingsPage from './NotificationSettingsPage'
 import KnowledgeBasePage from './KnowledgeBasePage'
 import PurchaseOrdersPage from './PurchaseOrdersPage'
@@ -317,13 +318,6 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showRegisterModal, isSubmitting]);
 
-  const modalRef = React.useRef(null);
-  const handleOverlayClick = (e) => {
-    if (modalRef.current && !modalRef.current.contains(e.target) && !isSubmitting) {
-      setShowRegisterModal(false);
-    }
-  };
-
   // Pagination & Filters State
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(10);
@@ -533,6 +527,15 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
       setIsUpdating(false);
     }
   };
+
+  const editUserFooter = (
+    <>
+      <button type="button" className="btn btn-secondary" onClick={() => setEditingUser(null)}>Cancel</button>
+      <button type="submit" className="btn btn-primary" disabled={isUpdating}>
+        {isUpdating ? 'Saving…' : 'Save Changes'}
+      </button>
+    </>
+  );
 
   const handleDeleteUser = async (u) => {
     if (!window.confirm(`Are you sure you want to permanently delete user "${u.username || u.name}"?`)) return;
@@ -949,48 +952,27 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
 
       {/* Centered Register New User Modal */}
       {showRegisterModal && (
-        <div 
-          className="modal-overlay" 
-          onClick={handleOverlayClick}
-          style={{ 
-            display: 'flex', 
-            alignItems: 'center', 
-            justifyContent: 'center', 
-            position: 'fixed', 
-            top: 0, 
-            left: 0, 
-            right: 0, 
-            bottom: 0, 
-            background: 'rgba(0,0,0,0.6)', 
-            zIndex: 100 
-          }}
-        >
-          <div 
-            ref={modalRef}
-            className="modal-content" 
-            style={{ 
-              maxWidth: '520px', 
-              width: '100%', 
-              maxHeight: '90vh',
-              overflowY: 'auto',
-              background: 'var(--bg-sidebar)', 
-              border: '1px solid var(--border-color)', 
-              borderRadius: '12px', 
-              padding: '24px' 
-            }}
-          >
-            <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
-              <h3 className="modal-title" style={{ fontSize: '18px', fontWeight: '700' }}>Register New User</h3>
-              <button 
-                className="modal-close-btn" 
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }} 
-                onClick={() => setShowRegisterModal(false)}
-                disabled={isSubmitting}
-              >
-                <X size={18} />
+        <Modal
+          isOpen
+          onClose={() => setShowRegisterModal(false)}
+          closeOnOverlayClick={!isSubmitting}
+          closeOnEscape={!isSubmitting}
+          closeDisabled={isSubmitting}
+          title="Register New User"
+          as="form"
+          onSubmit={handleCreateUser}
+          maxWidth="520px"
+          footer={
+            <>
+              <button type="button" className="btn btn-secondary" onClick={() => setShowRegisterModal(false)} disabled={isSubmitting}>
+                Cancel
               </button>
-            </div>
-            <form onSubmit={handleCreateUser} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <button type="submit" className="btn btn-primary" disabled={isSubmitting}>
+                {isSubmitting ? 'Creating…' : 'Create User'}
+              </button>
+            </>
+          }
+        >
               <div className="form-group">
                 <label className="form-label">Employee ID</label>
                 <input className="form-input" type="text" placeholder="e.g. EMP-101"
@@ -1072,31 +1054,20 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
                   {formSuccess}
                 </div>
               )}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '12px' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setShowRegisterModal(false)} disabled={isSubmitting}>
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary" disabled={isSubmitting}>
-                  {isSubmitting ? 'Creating…' : 'Create User'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Edit User Details Overlay Modal */}
       {editingUser && (
-        <div className="modal-overlay" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 100 }}>
-          <div className="modal-content" style={{ maxWidth: '500px', width: '100%', background: 'var(--bg-sidebar)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '24px' }}>
-            <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
-              <h3 className="modal-title" style={{ fontSize: '18px', fontWeight: '700' }}>Edit User: <span style={{ color: 'var(--primary)' }}>{editingUser.username}</span></h3>
-              <button className="modal-close-btn" style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }} onClick={() => setEditingUser(null)}>
-                <X size={18} />
-              </button>
-            </div>
-            <form onSubmit={handleEditUserSubmit}>
-              <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <Modal
+          isOpen
+          onClose={() => setEditingUser(null)}
+          title={<>Edit User: <span style={{ color: 'var(--primary)' }}>{editingUser.username}</span></>}
+          as="form"
+          onSubmit={handleEditUserSubmit}
+          maxWidth="520px"
+          footer={editUserFooter}
+        >
                 <div className="form-group">
                   <label className="form-label">Full Name *</label>
                   <input className="form-input" type="text" value={editFormName} onChange={e => setEditFormName(e.target.value)} required />
@@ -1159,16 +1130,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
                     {editSuccess}
                   </div>
                 )}
-              </div>
-              <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '20px' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setEditingUser(null)}>Cancel</button>
-                <button type="submit" className="btn btn-primary" disabled={isUpdating}>
-                  {isUpdating ? 'Saving…' : 'Save Changes'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );
@@ -6505,16 +6467,21 @@ function App() {
       
       {/* 1. Register Asset Modal */}
       {addAssetModal && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <div className="modal-header">
-              <h3 className="modal-title">Register Organization Asset</h3>
-              <button className="modal-close-btn" onClick={() => setAddAssetModal(false)}>
-                <X size={18} />
-              </button>
-            </div>
-            <form onSubmit={handleAddAsset}>
-              <div className="modal-body">
+        <Modal
+          isOpen
+          onClose={() => setAddAssetModal(false)}
+          title="Register Organization Asset"
+          as="form"
+          onSubmit={handleAddAsset}
+          footer={
+            <>
+              <button type="button" className="btn btn-secondary" onClick={() => setAddAssetModal(false)}>Cancel</button>
+              <button type="submit" className="btn btn-primary">File Asset Record</button>
+
+            </>
+          }
+        >
+
                 <div className="form-grid">
                   <div className="form-group">
                     <label className="form-label">Asset Classification</label>
@@ -6602,28 +6569,26 @@ function App() {
                     <textarea name="notes" placeholder="Write any asset configurations, tags, or repairs logs here..." className="form-input"></textarea>
                   </div>
                 </div>
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setAddAssetModal(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">File Asset Record</button>
-              </div>
-            </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* 2. Edit Asset Modal */}
       {editAssetModal && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <div className="modal-header">
-              <h3 className="modal-title">Edit Asset {editAssetModal.id} Specs</h3>
-              <button className="modal-close-btn" onClick={() => setEditAssetModal(null)}>
-                <X size={18} />
-              </button>
-            </div>
-            <form onSubmit={handleEditAsset}>
-              <div className="modal-body">
+        <Modal
+          isOpen
+          onClose={() => setEditAssetModal(null)}
+          title={<>Edit Asset {editAssetModal.id} Specs</>}
+          as="form"
+          onSubmit={handleEditAsset}
+          footer={
+            <>
+              <button type="button" className="btn btn-secondary" onClick={() => setEditAssetModal(null)}>Cancel</button>
+              <button type="submit" className="btn btn-primary">Save Changes</button>
+
+            </>
+          }
+        >
+
                 <div className="form-grid">
                   <div className="form-group">
                     <label className="form-label">Equipment Model Name</label>
@@ -6698,28 +6663,27 @@ function App() {
                     <textarea name="notes" defaultValue={editAssetModal.notes} className="form-input"></textarea>
                   </div>
                 </div>
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setEditAssetModal(null)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Save Changes</button>
-              </div>
-            </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* 3. Allocate Asset Modal */}
       {allocateModal && (
-        <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: '450px' }}>
-            <div className="modal-header">
-              <h3 className="modal-title">Allocate Asset {allocateModal.id}</h3>
-              <button className="modal-close-btn" onClick={() => setAllocateModal(null)}>
-                <X size={18} />
-              </button>
-            </div>
-            <form onSubmit={handleAllocate}>
-              <div className="modal-body">
+        <Modal
+          isOpen
+          onClose={() => setAllocateModal(null)}
+          title={<>Allocate Asset {allocateModal.id}</>}
+          as="form"
+          onSubmit={handleAllocate}
+          maxWidth="450px"
+          footer={
+            <>
+              <button type="button" className="btn btn-secondary" onClick={() => setAllocateModal(null)}>Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={allocateModal.availableQuantity === 0}>Authorize Allocation</button>
+
+            </>
+          }
+        >
+
                 <div style={{ background: 'var(--bg-sidebar)', padding: '12px 16px', borderRadius: 'var(--radius-md)', marginBottom: '16px', border: '1px solid var(--border-color)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
                     <span style={{ color: 'var(--text-secondary)' }}>Available Stock:</span>
@@ -6763,28 +6727,27 @@ function App() {
                   <label className="form-label">Allocation Notes / SLA terms</label>
                   <textarea name="notes" placeholder="e.g. Device assigned for remote engineering duties." className="form-input" disabled={allocateModal.availableQuantity === 0}></textarea>
                 </div>
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setAllocateModal(null)}>Cancel</button>
-                <button type="submit" className="btn btn-primary" disabled={allocateModal.availableQuantity === 0}>Authorize Allocation</button>
-              </div>
-            </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* 4. Transfer Asset Modal */}
       {transferModal && (
-        <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: '480px' }}>
-            <div className="modal-header">
-              <h3 className="modal-title">Transfer Asset {transferModal.id}</h3>
-              <button className="modal-close-btn" onClick={() => setTransferModal(null)}>
-                <X size={18} />
-              </button>
-            </div>
-            <form onSubmit={handleTransfer}>
-              <div className="modal-body">
+        <Modal
+          isOpen
+          onClose={() => setTransferModal(null)}
+          title={<>Transfer Asset {transferModal.id}</>}
+          as="form"
+          onSubmit={handleTransfer}
+          maxWidth="480px"
+          footer={
+            <>
+              <button type="button" className="btn btn-secondary" onClick={() => setTransferModal(null)}>Cancel</button>
+              <button type="submit" className="btn btn-primary">Authorize Transfer</button>
+
+            </>
+          }
+        >
+
                 <div style={{ padding: '10px', backgroundColor: 'var(--bg-app)', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '12px', marginBottom: '12px' }}>
                   Current Custodian: <strong>{transferModal.assignedEmployee || "Inventory"}</strong> ({transferModal.department})
                 </div>
@@ -6857,28 +6820,27 @@ function App() {
                   <label className="form-label">Transfer Rationale (optional)</label>
                   <textarea name="notes" placeholder="Reason for custodian shift or branch relocation (optional)..." className="form-input"></textarea>
                 </div>
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setTransferModal(null)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Authorize Transfer</button>
-              </div>
-            </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* 5. Return Asset Modal */}
       {returnModal && (
-        <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: '450px' }}>
-            <div className="modal-header">
-              <h3 className="modal-title">Return Asset {returnModal.id}</h3>
-              <button className="modal-close-btn" onClick={() => setReturnModal(null)}>
-                <X size={18} />
-              </button>
-            </div>
-            <form onSubmit={handleReturn}>
-              <div className="modal-body">
+        <Modal
+          isOpen
+          onClose={() => setReturnModal(null)}
+          title={<>Return Asset {returnModal.id}</>}
+          as="form"
+          onSubmit={handleReturn}
+          maxWidth="450px"
+          footer={
+            <>
+              <button type="button" className="btn btn-secondary" onClick={() => setReturnModal(null)}>Cancel</button>
+              <button type="submit" className="btn btn-primary">Record Return</button>
+
+            </>
+          }
+        >
+
                 <div style={{ padding: '10px', backgroundColor: 'var(--bg-app)', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '12px', marginBottom: '12px' }}>
                   Returning from Custodian: <strong>{returnModal.assignedEmployee}</strong> ({returnModal.department})
                 </div>
@@ -6894,14 +6856,7 @@ function App() {
                   <label className="form-label">Asset Condition Notes on Return</label>
                   <textarea name="notes" placeholder="Verify physical status (e.g. Scratch-free, Charger returned)..." className="form-input" required></textarea>
                 </div>
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setReturnModal(null)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Record Return</button>
-              </div>
-            </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* 5.1 Bulk Import Employees Modal */}
@@ -6953,15 +6908,16 @@ function App() {
 
       {/* 5.2.1 User Profile Modal */}
       {showProfileModal && (
-        <div className="modal-overlay" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 100 }}>
-          <div className="modal-content" style={{ maxWidth: '400px', width: '100%', background: 'var(--bg-sidebar)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '24px' }}>
-            <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
-              <h3 className="modal-title" style={{ fontSize: '18px', fontWeight: '700' }}>My Employee Profile</h3>
-              <button className="modal-close-btn" style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }} onClick={() => setShowProfileModal(false)}>
-                <X size={18} />
-              </button>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <Modal
+          isOpen
+          onClose={() => setShowProfileModal(false)}
+          title="My Employee Profile"
+          maxWidth="440px"
+          footer={
+            <button className="btn btn-secondary" onClick={() => setShowProfileModal(false)}>Close Profile</button>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                 <div style={{
                   width: '64px',
@@ -6992,26 +6948,28 @@ function App() {
                 <div><strong>Designation:</strong> {currentUser?.designation || 'Staff Administrator'}</div>
                 <div><strong>Account Status:</strong> <span style={{ color: 'var(--status-available)', fontWeight: '600' }}>{currentUser?.status || 'Active'}</span></div>
               </div>
-            </div>
-            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px' }}>
-              <button className="btn btn-secondary" onClick={() => setShowProfileModal(false)}>Close Profile</button>
-            </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {/* 5.3 Edit Assignment Modal */}
       {editAssignmentModal && (
-        <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: '450px' }}>
-            <div className="modal-header">
-              <h3 className="modal-title">Edit Custodian Assignment</h3>
-              <button className="modal-close-btn" onClick={() => setEditAssignmentModal(null)}>
-                <X size={18} />
-              </button>
-            </div>
-            <form onSubmit={handleEditAssignmentSubmit}>
-              <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <Modal
+          isOpen
+          onClose={() => setEditAssignmentModal(null)}
+          title="Edit Custodian Assignment"
+          as="form"
+          onSubmit={handleEditAssignmentSubmit}
+          maxWidth="450px"
+          footer={
+            <>
+              <button type="button" className="btn btn-secondary" onClick={() => setEditAssignmentModal(null)}>Cancel</button>
+              <button type="submit" className="btn btn-primary">Save Changes</button>
+
+            </>
+          }
+        >
+
                 <div className="form-group">
                   <label className="form-label">Employee Custodian Name</label>
                   <input type="text" name="employeeName" defaultValue={editAssignmentModal.employeeName} className="form-input" required />
@@ -7036,28 +6994,27 @@ function App() {
                   <label className="form-label">Administrative Notes</label>
                   <textarea name="notes" defaultValue={editAssignmentModal.notes || ''} className="form-input"></textarea>
                 </div>
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setEditAssignmentModal(null)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Save Changes</button>
-              </div>
-            </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* 5.4 Return Assignment Modal */}
       {returnAssignmentModal && (
-        <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: '450px' }}>
-            <div className="modal-header">
-              <h3 className="modal-title">Return Assignment Stock</h3>
-              <button className="modal-close-btn" onClick={() => setReturnAssignmentModal(null)}>
-                <X size={18} />
-              </button>
-            </div>
-            <form onSubmit={handleReturnAssignmentSubmit}>
-              <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <Modal
+          isOpen
+          onClose={() => setReturnAssignmentModal(null)}
+          title="Return Assignment Stock"
+          as="form"
+          onSubmit={handleReturnAssignmentSubmit}
+          maxWidth="450px"
+          footer={
+            <>
+              <button type="button" className="btn btn-secondary" onClick={() => setReturnAssignmentModal(null)}>Cancel</button>
+              <button type="submit" className="btn btn-primary">Record Return</button>
+
+            </>
+          }
+        >
+
                 <div style={{ padding: '12px 16px', background: 'var(--bg-sidebar)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', fontSize: '13px' }}>
                   <div>Asset: <strong>{returnAssignmentModal.assetId}</strong></div>
                   <div>Assigned Custodian: <strong>{returnAssignmentModal.employeeName}</strong></div>
@@ -7075,52 +7032,47 @@ function App() {
                   <label className="form-label">Return Notes / Condition</label>
                   <textarea name="notes" placeholder="Verify physical status (e.g. Scratched screen, fully functional)" className="form-input"></textarea>
                 </div>
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setReturnAssignmentModal(null)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Record Return</button>
-              </div>
-            </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* 6. QR Sticker Modal */}
       {qrStickerModal && (
-        <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: '380px' }}>
-            <div className="modal-header">
-              <h3 className="modal-title">Security tag {qrStickerModal.id}</h3>
-              <button className="modal-close-btn" onClick={() => setQrStickerModal(null)}>
-                <X size={18} />
-              </button>
-            </div>
-            <div className="modal-body" style={{ alignItems: 'center', backgroundColor: 'var(--bg-app)' }}>
-              <QRCodeSticker asset={qrStickerModal} />
-              <p style={{ fontSize: '11px', textAlign: 'center', color: 'var(--text-secondary)', marginTop: '8px' }}>
-                Printable label contains encrypted validation payload and dual barcode patterns.
-              </p>
-            </div>
-            <div className="modal-footer" style={{ width: '100%' }}>
-              <button className="btn btn-secondary" style={{ width: '100%' }} onClick={() => window.print()}>
-                Print Sticker Label
-              </button>
-            </div>
-          </div>
-        </div>
+        <Modal
+          isOpen
+          onClose={() => setQrStickerModal(null)}
+          title={<>Security tag {qrStickerModal.id}</>}
+          maxWidth="380px"
+          bodyStyle={{ alignItems: 'center', backgroundColor: 'var(--bg-app)' }}
+          footer={
+            <button className="btn btn-secondary" style={{ width: '100%' }} onClick={() => window.print()}>
+              Print Sticker Label
+            </button>
+          }
+        >
+          <QRCodeSticker asset={qrStickerModal} />
+          <p style={{ fontSize: '11px', textAlign: 'center', color: 'var(--text-secondary)', marginTop: '8px' }}>
+            Printable label contains encrypted validation payload and dual barcode patterns.
+          </p>
+        </Modal>
       )}
 
       {/* 7. Asset Details / Custody Timeline Modal */}
       {assetDetailModal && (
-        <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: '600px' }}>
-            <div className="modal-header">
-              <h3 className="modal-title">Lifecycle & Timeline: {assetDetailModal.id}</h3>
-              <button className="modal-close-btn" onClick={() => setAssetDetailModal(null)}>
-                <X size={18} />
+        <Modal
+          isOpen
+          onClose={() => setAssetDetailModal(null)}
+          title={<>Lifecycle & Timeline: {assetDetailModal.id}</>}
+          maxWidth="600px"
+          footer={
+            <>
+              <button className="btn btn-secondary" style={{ width: '100%' }} onClick={() => setAssetDetailModal(null)}>
+                Dismiss Details
               </button>
-            </div>
-            <div className="modal-body">
+
+            </>
+          }
+        >
+
               {/* Core Details Grid */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', borderBottom: '1px solid var(--border-color)', paddingBottom: '16px' }}>
                 <div>
@@ -7203,29 +7155,26 @@ function App() {
                   ))}
                 </div>
               </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-secondary" style={{ width: '100%' }} onClick={() => setAssetDetailModal(null)}>
-                Dismiss Details
-              </button>
-            </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* 8. Invoice Details Modal */}
       {invoiceDetailModal && (
-        <div className="modal-overlay" onClick={(e) => {
-          if (e.target.className === 'modal-overlay') setInvoiceDetailModal(null);
-        }}>
-          <div className="modal-content" style={{ maxWidth: '600px' }}>
-            <div className="modal-header">
-              <h3 className="modal-title">Purchase Invoice Details: {invoiceDetailModal.id}</h3>
-              <button className="modal-close-btn" onClick={() => setInvoiceDetailModal(null)}>
-                <X size={18} />
+        <Modal
+          isOpen
+          onClose={() => setInvoiceDetailModal(null)}
+          title={<>Purchase Invoice Details: {invoiceDetailModal.id}</>}
+          maxWidth="600px"
+          footer={
+            <>
+              <button className="btn btn-secondary" style={{ width: '100%' }} onClick={() => setInvoiceDetailModal(null)}>
+                Dismiss Details
               </button>
-            </div>
-            <div className="modal-body">
+
+            </>
+          }
+        >
+
               {/* Invoice Specs */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', borderBottom: '1px solid var(--border-color)', paddingBottom: '16px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -7343,14 +7292,7 @@ function App() {
                   />
                 </div>
               )}
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-secondary" style={{ width: '100%' }} onClick={() => setInvoiceDetailModal(null)}>
-                Dismiss Details
-              </button>
-            </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
     </div>

@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { api } from './api';
 import { openStoredFile } from './files';
+import Modal from './Modal';
 
 const MANAGE_ROLES = ['Super Admin', 'Finance Team'];
 
@@ -357,13 +358,23 @@ const PurchaseOrdersPage = ({ currentRole, invoices = [], amcs = [], addToast })
       </div>
 
       {viewing && (
-        <div className="modal-overlay" onClick={() => setViewing(null)}>
-          <div className="modal-content" style={{ maxWidth: '640px' }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3 className="modal-title">{viewing.poNumber}</h3>
-              <button className="modal-close-btn" onClick={() => setViewing(null)}><X size={18} /></button>
-            </div>
-            <div className="modal-body">
+        <Modal
+          isOpen
+          onClose={() => setViewing(null)}
+          closeOnOverlayClick
+          title={viewing.poNumber}
+          maxWidth="640px"
+          footer={
+            <>
+              <button className="btn btn-secondary" onClick={() => setViewing(null)}>Close</button>
+              {canManage && (
+                <button className="btn btn-primary" onClick={() => { setEditing(viewing); setViewing(null); }}>
+                  <Edit2 size={14} /> Edit
+                </button>
+              )}
+            </>
+          }
+        >
               <div className="form-grid">
                 <Detail label="Vendor" value={viewing.vendor} />
                 <Detail label="Status" value={<span className={STATUS_BADGE[viewing.status] || 'badge'}>{viewing.status}</span>} />
@@ -402,17 +413,7 @@ const PurchaseOrdersPage = ({ currentRole, invoices = [], amcs = [], addToast })
                   </span>
                 )}
               </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={() => setViewing(null)}>Close</button>
-              {canManage && (
-                <button className="btn btn-primary" onClick={() => { setEditing(viewing); setViewing(null); }}>
-                  <Edit2 size={14} /> Edit
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

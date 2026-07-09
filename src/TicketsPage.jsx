@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { api } from './api';
 import { openStoredFile } from './files';
+import Modal from './Modal';
 import Markdown from './Markdown';
 
 const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addToast }) => {
@@ -1699,16 +1700,27 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
 
       {/* 3. Ticket Creation Modal */}
       {showCreateModal && (
-        <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: '500px' }}>
-            <div className="modal-header">
-              <h3 className="modal-title">File Help Desk Ticket</h3>
-              <button className="modal-close-btn" onClick={() => { setShowCreateModal(false); setUploadedAttachments([]); }} disabled={isFiling}>
-                <X size={18} />
+        <Modal
+          isOpen
+          onClose={() => { setShowCreateModal(false); setUploadedAttachments([]); }}
+          title="File Help Desk Ticket"
+          as="form"
+          onSubmit={handleCreateTicket}
+          maxWidth="560px"
+          footer={
+            <>
+              <button type="button" className="btn btn-secondary" onClick={() => { setShowCreateModal(false); setUploadedAttachments([]); }} disabled={isFiling}>Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={isFiling} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {isFiling ? (
+                  <>
+                    <RefreshCw size={14} className="animate-spin" />
+                    Filing Ticket...
+                  </>
+                ) : 'File Ticket'}
               </button>
-            </div>
-            <form onSubmit={handleCreateTicket}>
-              <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            </>
+          }
+        >
                 
                 {/* Unified helpdesk: the requester chooses the queue. Previously this was
                     auto-routed from their own profile, so an HR employee's IT problem
@@ -1867,54 +1879,23 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
                   )}
                 </div>
 
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => { setShowCreateModal(false); setUploadedAttachments([]); }} disabled={isFiling}>Cancel</button>
-                <button type="submit" className="btn btn-primary" disabled={isFiling} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  {isFiling ? (
-                    <>
-                      <RefreshCw size={14} className="animate-spin" />
-                      Filing Ticket...
-                    </>
-                  ) : 'File Ticket'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Article preview, opened from the suggestions panel. Rendered above the create
           modal so the half-filled form is preserved behind it. */}
+      {/* Stacked above the create modal; the half-filled form is preserved behind it. */}
       {kbArticlePreview && (
-        <div className="modal-overlay" style={{ zIndex: 600 }} onClick={() => setKbArticlePreview(null)}>
-          <div className="modal-content" style={{ maxWidth: '760px' }} onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <div style={{ minWidth: 0 }}>
-                <h3 className="modal-title">{kbArticlePreview.title}</h3>
-                {kbArticlePreview.summary && (
-                  <span style={{ fontSize: '12.5px', color: 'var(--text-secondary)' }}>{kbArticlePreview.summary}</span>
-                )}
-              </div>
-              <button className="modal-close-btn" onClick={() => setKbArticlePreview(null)}>
-                <X size={18} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <Markdown>{kbArticlePreview.body}</Markdown>
-              {kbArticlePreview.attachments?.length > 0 && (
-                <div className="attachment-preview-grid">
-                  {kbArticlePreview.attachments.map(a => (
-                    <div key={a.id} className="attachment-preview-card"
-                         onClick={() => openStoredFile(a.file_path, m => addToast('Cannot open file', m, 'error'))}>
-                      <FileText className="attachment-file-icon" size={22} />
-                      <span className="attachment-file-name" title={a.file_name}>{a.file_name}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="modal-footer">
+        <Modal
+          isOpen
+          onClose={() => setKbArticlePreview(null)}
+          closeOnOverlayClick
+          title={kbArticlePreview.title}
+          subtitle={kbArticlePreview.summary}
+          maxWidth="760px"
+          zIndex={600}
+          footer={
+            <>
               <button className="btn btn-secondary" onClick={() => setKbArticlePreview(null)}>
                 Back to my ticket
               </button>
@@ -1931,9 +1912,22 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
               >
                 This answered my question
               </button>
+            </>
+          }
+        >
+          <Markdown>{kbArticlePreview.body}</Markdown>
+          {kbArticlePreview.attachments?.length > 0 && (
+            <div className="attachment-preview-grid">
+              {kbArticlePreview.attachments.map(a => (
+                <div key={a.id} className="attachment-preview-card"
+                     onClick={() => openStoredFile(a.file_path, m => addToast('Cannot open file', m, 'error'))}>
+                  <FileText className="attachment-file-icon" size={22} />
+                  <span className="attachment-file-name" title={a.file_name}>{a.file_name}</span>
+                </div>
+              ))}
             </div>
-          </div>
-        </div>
+          )}
+        </Modal>
       )}
     </div>
   );

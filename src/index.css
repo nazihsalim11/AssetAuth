@@ -2018,6 +2018,10 @@ select.form-input {
    18  MODALS & DRAWERS
    ============================================================ */
 
+/* The overlay itself never scrolls. It is a padded, centred flex container, and the
+   dialog is capped at 100% of its content box — that is the viewport minus the
+   padding, which stays correct at 100%, 125% and 150% zoom and on short laptop
+   screens, where a fixed `90vh` can still overflow once browser chrome is counted. */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -2029,7 +2033,8 @@ select.form-input {
   justify-content: center;
   z-index: 500;
   padding: var(--sp-6);
-  overflow-y: auto;
+  overflow: hidden;
+  overscroll-behavior: contain;
   animation: overlay-in var(--dur-2) var(--ease-standard);
 }
 
@@ -2040,11 +2045,27 @@ select.form-input {
   box-shadow: var(--shadow-xl);
   width: 100%;
   max-width: 680px;
-  max-height: 90vh;
+  max-height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  /* Nothing may escape the rounded box — this is what used to let footers render
+     outside the dialog. */
+  overflow: hidden;
   animation: modal-in var(--dur-3) var(--ease-out);
   transform-origin: center;
+}
+
+/* Safety net. A dialog that still hand-rolls `<form>` inside `.modal-content`
+   (rather than passing `as="form"` to <Modal>) would otherwise break the flex chain:
+   an unstyled flex item defaults to `min-height: auto` and refuses to shrink below
+   its content, so the body's `overflow-y` never engages. */
+.modal-content > form {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .modal-header {
@@ -2052,9 +2073,9 @@ select.form-input {
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-3);
-  padding: var(--sp-5) var(--sp-6) var(--sp-4);
+  padding: var(--sp-5) var(--sp-6);
   border-bottom: 1px solid var(--border-color);
-  flex-shrink: 0;
+  flex: 0 0 auto;
 }
 
 .modal-title {
@@ -2091,21 +2112,29 @@ select.form-input {
   transform: scale(0.92);
 }
 
+/* The only scrolling region. `min-height: 0` is what actually lets it shrink;
+   without it a flex item's automatic minimum size pins it to its content height. */
 .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
   padding: var(--sp-6);
   overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-4);
+  gap: var(--sp-5);
 }
 
+/* Always visible: it is a sibling of the scroll container, not inside it. */
 .modal-footer {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: var(--sp-2);
-  padding: var(--sp-4) var(--sp-6) var(--sp-5);
+  padding: var(--sp-4) var(--sp-6);
   border-top: 1px solid var(--border-color);
-  flex-shrink: 0;
+  background: var(--bg-modal);
+  flex: 0 0 auto;
 }
 
 /* ============================================================
@@ -3675,9 +3704,13 @@ select.form-input {
     align-items: flex-end;
   }
 
+  /* Bottom sheet. `100%` of the unpadded overlay would be the full viewport, so cap
+     it explicitly and leave a little of the page visible above. dvh tracks mobile
+     browser chrome as it collapses; vh does not. */
   .modal-content {
     max-width: 100%;
-    max-height: 94vh;
+    max-height: 92vh;
+    max-height: 92dvh;
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   }
 

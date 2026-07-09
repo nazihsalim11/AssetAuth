@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { X, Download, FileUp, AlertCircle, CheckCircle2, AlertTriangle, RefreshCw } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { api } from './api';
+import Modal from './Modal';
 
 const validateAndFormatPhone = (phone) => {
   if (!phone) return { isValid: true, value: '' };
@@ -456,15 +457,23 @@ const BulkImportModal = ({ isOpen, onClose, type, onImportComplete, isApiConnect
   };
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-content" style={{ maxWidth: '600px' }}>
-        <div className="modal-header">
-          <h3 className="modal-title">Bulk Import {type === 'employees' ? 'Employees Directory' : type === 'assets' ? 'Inventory Assets' : 'Purchase Invoices'}</h3>
-          <button className="modal-close-btn" onClick={onClose} disabled={isParsing}>
-            <X size={18} />
+    <Modal
+      isOpen
+      onClose={onClose}
+      closeDisabled={isParsing}
+      closeOnEscape={!isParsing}
+      title={`Bulk Import ${type === 'employees' ? 'Employees Directory' : type === 'assets' ? 'Inventory Assets' : 'Purchase Invoices'}`}
+      maxWidth="600px"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose} disabled={isParsing}>Cancel / Exit</button>
+          <button type="button" className="btn btn-primary" onClick={handleImport} disabled={!file || isParsing} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <FileUp size={15} />
+            Execute Bulk Import
           </button>
-        </div>
-        <div className="modal-body">
+        </>
+      }
+    >
           <p style={{ margin: '0 0 20px', color: 'var(--text-secondary)' }}>
             Upload an Excel (.xlsx) or CSV file with the structured template columns. You can download the pre-configured blank template below.
           </p>
@@ -599,16 +608,7 @@ const BulkImportModal = ({ isOpen, onClose, type, onImportComplete, isApiConnect
               </ul>
             </div>
           )}
-        </div>
-        <div className="modal-footer">
-          <button type="button" className="btn btn-secondary" onClick={onClose} disabled={isParsing}>Cancel / Exit</button>
-          <button type="button" className="btn btn-primary" onClick={handleImport} disabled={!file || isParsing} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <FileUp size={15} />
-            Execute Bulk Import
-          </button>
-        </div>
-      </div>
-    </div>
+    </Modal>
   );
 };
 
