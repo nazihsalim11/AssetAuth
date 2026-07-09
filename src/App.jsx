@@ -1837,6 +1837,7 @@ function App() {
   const [addAssetInvoiceId, setAddAssetInvoiceId] = useState('');
   const [editAssetInvoiceId, setEditAssetInvoiceId] = useState('');
   const [allocateEmployee, setAllocateEmployee] = useState('');
+  const [allocateDepartment, setAllocateDepartment] = useState('');
   const [transferTargetType, setTransferTargetType] = useState('employee');
   const [transferEmployee, setTransferEmployee] = useState('');
   const [transferDepartment, setTransferDepartment] = useState('');
@@ -2026,6 +2027,16 @@ function App() {
       setTransferDepartment(transferModal.department || '');
     }
   }, [transferModal]);
+
+  // Reset the allocation form each time the modal opens, so a previous allocation's
+  // custodian and department cannot linger. Department starts empty until an employee
+  // is chosen; selecting one fills it from that employee's own department.
+  React.useEffect(() => {
+    if (allocateModal) {
+      setAllocateEmployee('');
+      setAllocateDepartment('');
+    }
+  }, [allocateModal]);
   const [returnModal, setReturnModal] = useState(null);
   const [showBulkImportEmployees, setShowBulkImportEmployees] = useState(false);
   const [showBulkImportAssets, setShowBulkImportAssets] = useState(false);
@@ -6703,7 +6714,15 @@ function App() {
                     name="employee"
                     options={employeeOptions}
                     value={allocateEmployee}
-                    onChange={(e) => setAllocateEmployee(e.target.value)}
+                    onChange={(e) => {
+                      const name = e.target.value;
+                      setAllocateEmployee(name);
+                      // Department follows the chosen employee. If they have no
+                      // department on record, clear it rather than leaving a stale
+                      // value, so the placeholder shows instead of wrong data.
+                      const match = findEmployeeByName(name);
+                      setAllocateDepartment(match?.department || '');
+                    }}
                     required
                     searchable
                     searchPlaceholder="Search by name, department or ID..."
@@ -6713,7 +6732,21 @@ function App() {
                 </div>
                 <div className="form-group" style={{ marginTop: '12px' }}>
                   <label className="form-label">Allocation Department</label>
-                  <input type="text" name="department" defaultValue={allocateModal.department} className="form-input" required disabled={allocateModal.availableQuantity === 0} />
+                  <input
+                    type="text"
+                    name="department"
+                    value={allocateDepartment}
+                    onChange={(e) => setAllocateDepartment(e.target.value)}
+                    placeholder={allocateEmployee ? 'No department on record — enter one' : 'Select an employee to auto-fill'}
+                    className="form-input"
+                    required
+                    disabled={allocateModal.availableQuantity === 0}
+                  />
+                  {allocateEmployee && findEmployeeByName(allocateEmployee)?.department && (
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      Auto-filled from {allocateEmployee}. You can still override it.
+                    </span>
+                  )}
                 </div>
                 <div className="form-group" style={{ marginTop: '12px' }}>
                   <label className="form-label">Assign Quantity *</label>
