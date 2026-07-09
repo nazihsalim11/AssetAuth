@@ -188,6 +188,7 @@ export const api = {
   markAllNotificationsRead: () => apiFetch('/notifications', { method: 'PATCH' }),
   deleteNotification: (id) => apiFetch(`/notifications/${id}`, { method: 'DELETE' }),
   bulkDeleteNotifications: (notificationIds) => apiFetch('/notifications/bulk/delete', { method: 'POST', body: JSON.stringify({ notificationIds }) }),
+  bulkMarkNotificationsRead: (notificationIds, read) => apiFetch('/notifications/bulk/read', { method: 'POST', body: JSON.stringify({ notificationIds, read }) }),
 
   // Employee asset lookup
   searchEmployees: (q) => apiFetch(`/employees/search?q=${encodeURIComponent(q)}`),
@@ -219,6 +220,8 @@ export const api = {
 
   // Emails
   getEmails: () => apiFetch('/emails'),
+  deleteEmail: (id) => apiFetch(`/emails/${id}`, { method: 'DELETE' }),
+  bulkDeleteEmails: (emailIds) => apiFetch('/emails/bulk/delete', { method: 'POST', body: JSON.stringify({ emailIds }) }),
 
   // Users
   getUsers: () => apiFetch('/users'),

@@ -794,13 +794,19 @@ app.post('/api/movements', async (req, res) => {
 
 
 // --- DOCUMENTS API ---
+// Requires authentication so the repository is never readable anonymously. Which
+// signed-in roles may view it is governed by the client role-permission matrix
+// (viewDocuments), consistent with how the Reports, AMC and Finance tabs are gated;
+// that matrix is a frontend construct, so it is not re-enforced here.
 app.get('/api/documents', async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
   try {
     const result = await db.query('SELECT * FROM documents ORDER BY created_at DESC');
     res.json(result.rows);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Database query failed' });
+    console.error('GET /api/documents failed:', err);
+    res.status(500).json({ error: 'Database query failed: ' + err.message });
   }
 });
 
@@ -883,12 +889,45 @@ app.get('/api/notifications', async (req, res) => {
 // empty. Outgoing notification emails are mirrored into this table, so it now shows
 // what the system actually sent.
 app.get('/api/emails', async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
   try {
     const result = await db.query('SELECT * FROM emails ORDER BY created_at DESC LIMIT 200');
     res.json(result.rows);
   } catch (err) {
     console.error('GET /api/emails failed:', err);
     res.status(500).json({ error: 'Database query failed: ' + err.message });
+  }
+});
+
+// The email alerts inbox is a shared, system-generated log, so any signed-in user
+// may prune it. (Unlike notifications, emails carry no per-user ownership.)
+app.delete('/api/emails/:id', async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  try {
+    const { rowCount } = await db.query('DELETE FROM emails WHERE id = $1', [req.params.id]);
+    if (rowCount === 0) return res.status(404).json({ error: 'Email not found' });
+    res.json({ message: 'Email deleted', deleted: rowCount });
+  } catch (err) {
+    console.error('DELETE /api/emails/:id failed:', err);
+    res.status(500).json({ error: 'Could not delete email: ' + err.message });
+  }
+});
+
+app.post('/api/emails/bulk/delete', async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  const { emailIds } = req.body;
+  if (!Array.isArray(emailIds) || emailIds.length === 0) {
+    return res.status(400).json({ error: 'Payload must contain a non-empty emailIds array' });
+  }
+  try {
+    const { rowCount } = await db.query('DELETE FROM emails WHERE id = ANY($1::text[])', [emailIds.map(String)]);
+    res.json({ message: `Deleted ${rowCount} email(s)`, deleted: rowCount });
+  } catch (err) {
+    console.error('POST /api/emails/bulk/delete failed:', err);
+    res.status(500).json({ error: 'Bulk delete failed: ' + err.message });
   }
 });
 
@@ -981,6 +1020,29 @@ app.post('/api/notifications/bulk/delete', async (req, res) => {
   } catch (err) {
     console.error('POST /api/notifications/bulk/delete failed:', err);
     res.status(500).json({ error: 'Bulk delete failed: ' + err.message });
+  }
+});
+
+// Bulk mark read/unread, scoped to the caller's own notifications plus broadcasts —
+// the same visibility rule used everywhere else notifications are touched.
+app.post('/api/notifications/bulk/read', async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  const { notificationIds, read } = req.body;
+  if (!Array.isArray(notificationIds) || notificationIds.length === 0) {
+    return res.status(400).json({ error: 'Payload must contain a non-empty notificationIds array' });
+  }
+  try {
+    const { rowCount } = await db.query(
+      `UPDATE notifications SET read = $1
+       WHERE id = ANY($2::text[]) AND (user_id = $3 OR user_id IS NULL)`,
+      [read !== false, notificationIds.map(String), user.id]
+    );
+    res.json({ message: `Updated ${rowCount} notification(s)`, updated: rowCount });
+  } catch (err) {
+    console.error('POST /api/notifications/bulk/read failed:', err);
+    res.status(500).json({ error: 'Bulk update failed: ' + err.message });
   }
 });
 

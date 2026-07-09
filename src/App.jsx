@@ -6,8 +6,8 @@ import * as XLSX from 'xlsx'
 import { silk } from './engine/motion'
 import { openStoredFile } from './files'
 import Modal from './Modal'
-import NotificationSettingsPage from './NotificationSettingsPage'
 import KnowledgeBasePage from './KnowledgeBasePage'
+import EmailInboxModule from './EmailInboxModule'
 import PurchaseOrdersPage from './PurchaseOrdersPage'
 import EmployeeAssetLookup from './EmployeeAssetLookup'
 import {
@@ -1140,22 +1140,23 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
 // Keys match the action strings used in hasPermission().
 // 'Super Admin' is always full-access and cannot be edited.
 const DEFAULT_ROLE_PERMISSIONS = {
-  'IT Admin':       { view: true,  write: true,  allocate: true,  delete: true,  finance: false, viewReports: true,  viewAMC: true,  viewFinance: false },
-  'Facility Admin': { view: true,  write: true,  allocate: true,  delete: true,  finance: false, viewReports: true,  viewAMC: true,  viewFinance: false },
-  'Finance Team':   { view: true,  write: false, allocate: false, delete: false, finance: true,  viewReports: true,  viewAMC: true,  viewFinance: true  },
-  'Auditor':        { view: true,  write: false, allocate: false, delete: false, finance: false, viewReports: true,  viewAMC: true,  viewFinance: true  },
-  'Employee':       { view: true,  write: false, allocate: false, delete: false, finance: false, viewReports: false, viewAMC: false, viewFinance: false },
+  'IT Admin':       { view: true,  write: true,  allocate: true,  delete: true,  finance: false, viewReports: true,  viewAMC: true,  viewFinance: false, viewDocuments: true  },
+  'Facility Admin': { view: true,  write: true,  allocate: true,  delete: true,  finance: false, viewReports: true,  viewAMC: true,  viewFinance: false, viewDocuments: true  },
+  'Finance Team':   { view: true,  write: false, allocate: false, delete: false, finance: true,  viewReports: true,  viewAMC: true,  viewFinance: true,  viewDocuments: true  },
+  'Auditor':        { view: true,  write: false, allocate: false, delete: false, finance: false, viewReports: true,  viewAMC: true,  viewFinance: true,  viewDocuments: true  },
+  'Employee':       { view: true,  write: false, allocate: false, delete: false, finance: false, viewReports: false, viewAMC: false, viewFinance: false, viewDocuments: false },
 };
 
 const PERMISSION_LABELS = [
-  { key: 'view',        label: 'View Assets',       description: 'Can browse the asset list' },
-  { key: 'write',       label: 'Add / Edit Assets',  description: 'Can register and modify assets' },
-  { key: 'allocate',    label: 'Allocate Assets',    description: 'Can assign assets to employees' },
-  { key: 'delete',      label: 'Delete Assets',      description: 'Can permanently remove assets' },
-  { key: 'finance',     label: 'Finance Actions',    description: 'Can manage invoices and payments' },
-  { key: 'viewReports', label: 'View Reports',       description: 'Can access Reports & Logs tab' },
-  { key: 'viewAMC',     label: 'View AMC',           description: 'Can access AMC Contracts tab' },
-  { key: 'viewFinance', label: 'View Finance Tab',   description: 'Can access Finance tab' },
+  { key: 'view',          label: 'View Assets',        description: 'Can browse the asset list' },
+  { key: 'write',         label: 'Add / Edit Assets',  description: 'Can register and modify assets' },
+  { key: 'allocate',      label: 'Allocate Assets',    description: 'Can assign assets to employees' },
+  { key: 'delete',        label: 'Delete Assets',      description: 'Can permanently remove assets' },
+  { key: 'finance',       label: 'Finance Actions',    description: 'Can manage invoices and payments' },
+  { key: 'viewReports',   label: 'View Reports',       description: 'Can access Reports & Logs tab' },
+  { key: 'viewAMC',       label: 'View AMC',           description: 'Can access AMC Contracts tab' },
+  { key: 'viewFinance',   label: 'View Finance Tab',   description: 'Can access Finance tab' },
+  { key: 'viewDocuments', label: 'View Documents',     description: 'Can access the Document Repository' },
 ];
 
 const EDITABLE_ROLES = ['IT Admin', 'Facility Admin', 'Finance Team', 'Auditor', 'Employee'];
@@ -1262,7 +1263,7 @@ const UserManagementPage = ({ usersList, setUsersList, isApiConnected, rolePermi
     <div>
       {/* Sub-tab bar */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '28px', background: 'var(--bg-sidebar)', padding: '4px', borderRadius: 'var(--radius-lg)', width: 'fit-content', border: '1px solid var(--border-color)' }}>
-        {[{ id: 'directory', label: '👥  User Directory' }, { id: 'permissions', label: '🔐  Role Permissions' }, { id: 'notifications', label: '🔔  Notifications' }].map(tab => (
+        {[{ id: 'directory', label: '👥  User Directory' }, { id: 'permissions', label: '🔐  Role Permissions' }].map(tab => (
           <button
             key={tab.id}
             onClick={() => setUsersSubTab(tab.id)}
@@ -1298,9 +1299,6 @@ const UserManagementPage = ({ usersList, setUsersList, isApiConnected, rolePermi
           rolePermissions={rolePermissions}
           setRolePermissions={setRolePermissions}
         />
-      )}
-      {usersSubTab === 'notifications' && (
-        <NotificationSettingsPage addToast={addToast} currentRole={currentRole} />
       )}
     </div>
   );
@@ -1713,6 +1711,23 @@ try {
   // localStorage unavailable (private mode / disabled); nothing to purge.
 }
 
+// Business data cached in localStorage for the offline fallback. All of it is
+// role-scoped, so it must be wiped on logout — otherwise the next user to sign in on
+// the same browser could read the previous user's assets, invoices or user list
+// straight out of the cache before the server response arrives.
+const SENSITIVE_CACHE_KEYS = [
+  'db_assets', 'db_amcs', 'db_invoices', 'db_documents', 'db_movements',
+  'db_logs', 'db_notifications', 'db_emails', 'db_users', 'db_assignments'
+];
+
+const clearCachedUserData = () => {
+  try {
+    SENSITIVE_CACHE_KEYS.forEach(k => localStorage.removeItem(k));
+  } catch {
+    // localStorage unavailable; nothing to clear.
+  }
+};
+
 // QR Code Sticker Renderer Component
 const QRCodeSticker = ({ asset }) => {
   const [qrUrl, setQrUrl] = useState('');
@@ -1820,7 +1835,17 @@ function App() {
   const [emails, setEmails] = useState(() => getStoredData('db_emails', INITIAL_EMAILS));
   const [selectedEmailId, setSelectedEmailId] = useState(() => emails[0]?.id || null);
   const [usersList, setUsersList] = useState(() => getStoredData('db_users', DEMO_CREDENTIALS));
-  const [rolePermissions, setRolePermissions] = useState(() => getStoredData('db_role_permissions', DEFAULT_ROLE_PERMISSIONS));
+  const [rolePermissions, setRolePermissions] = useState(() => {
+    // Merge cached permissions over the defaults so a permission key added in a later
+    // build (e.g. viewDocuments) is present for users whose cache predates it —
+    // otherwise the new toggle reads as undefined/false for everyone until reset.
+    const stored = getStoredData('db_role_permissions', DEFAULT_ROLE_PERMISSIONS);
+    const merged = {};
+    for (const role of Object.keys(DEFAULT_ROLE_PERMISSIONS)) {
+      merged[role] = { ...DEFAULT_ROLE_PERMISSIONS[role], ...(stored[role] || {}) };
+    }
+    return merged;
+  });
   const [assignments, setAssignments] = useState(() => getStoredData('db_assignments', []));
 
   const [quickAllocAssetId, setQuickAllocAssetId] = useState('');
@@ -1838,6 +1863,7 @@ function App() {
   const [editAssetInvoiceId, setEditAssetInvoiceId] = useState('');
   const [allocateEmployee, setAllocateEmployee] = useState('');
   const [allocateDepartment, setAllocateDepartment] = useState('');
+  const [isAllocating, setIsAllocating] = useState(false);
   const [transferTargetType, setTransferTargetType] = useState('employee');
   const [transferEmployee, setTransferEmployee] = useState('');
   const [transferDepartment, setTransferDepartment] = useState('');
@@ -1860,13 +1886,41 @@ function App() {
   const [isApiConnected, setIsApiConnected] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
 
-  // Initialize live data from PostgreSQL if connected
+  // Reload live data from PostgreSQL whenever the authenticated identity changes.
+  //
+  // Keying on the user id is the security fix: this effect used to run once at mount,
+  // but logging out and back in as a different user never remounts <App>, so the
+  // previous user's assets stayed in state (and in localStorage) until a manual page
+  // refresh. An admin's full asset list would linger for the employee who logged in
+  // next. Re-running per identity means the server — which scopes every response to
+  // the caller's token — repopulates state for the new user immediately.
+  //
+  // authKey folds login and logout into one trigger: a real id when signed in, null
+  // when signed out.
+  const authKey = currentUser ? (currentUser.id ?? currentUser.username ?? 'session') : null;
+
   useEffect(() => {
-    const initApiData = async () => {
+    // Ignore a response that arrives after the identity changed again (fast
+    // logout/login), so a stale in-flight load can never overwrite the current user.
+    let cancelled = false;
+
+    // Signed out: hold nothing role-scoped in memory or in the cache.
+    if (!authKey) {
+      clearCachedUserData();
+      setAssets([]); setAmcs([]); setInvoices([]); setDocuments([]);
+      setMovements([]); setLogs([]); setNotifications([]); setEmails([]);
+      setAssignments([]); setUsersList([]);
+      setIsInitialLoading(false);
+      return () => { cancelled = true; };
+    }
+
+    setIsInitialLoading(true);
+    (async () => {
       try {
         const connected = await api.checkConnection();
+        if (cancelled) return;
         if (connected) {
-          console.log('[AssetFlow] Connected to PostgreSQL API backend. Loading live data...');
+          console.log('[AssetFlow] Loading live data for the current session...');
           const [dbAssets, dbAmcs, dbInvoices, dbDocuments, dbMovements, dbLogs, dbNotifications, dbEmails, dbUsers, dbAssignments] = await Promise.all([
             api.getAssets(),
             api.getAmcs(),
@@ -1879,13 +1933,11 @@ function App() {
             api.getUsers(),
             api.getAssignments()
           ]);
+          if (cancelled) return;
 
           // Promise.all above rejects if any fetch fails, so reaching this point
-          // means every response is authoritative — including an empty one. The
-          // old `if (x.length > 0)` guards treated "the server has no rows" as
-          // "no data, keep the cache", so deletions could never propagate: the
-          // registry kept rendering assignments for assets and employees that had
-          // already been removed. Always take the server's answer.
+          // means every response is authoritative — including an empty one. Always
+          // take the server's answer; it is already scoped to this user's role.
           const assetsList = dbAssets || [];
           setAssets(assetsList);
 
@@ -1913,13 +1965,15 @@ function App() {
           console.log('[AssetFlow] API backend offline. Using LocalStorage fallback.');
         }
       } catch (err) {
-        console.warn('[AssetFlow] PostgreSQL backend connection error. Reverting to LocalStorage.', err);
+        if (!cancelled) console.warn('[AssetFlow] PostgreSQL backend connection error. Reverting to LocalStorage.', err);
       } finally {
-        setIsInitialLoading(false);
+        if (!cancelled) setIsInitialLoading(false);
       }
-    };
-    initApiData();
-  }, []);
+    })();
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authKey]);
 
   // Re-reads the custodian registry from the server. The backend inner-joins assets
   // and users, so whatever it returns is guaranteed to reference records that still
@@ -2543,6 +2597,9 @@ function App() {
   // Handle asset allocation
   const handleAllocate = async (e) => {
     e.preventDefault();
+    // Re-entry guard: a second submit (double click, Enter while the first is in
+    // flight) would create a duplicate assignment. Bail before any work runs.
+    if (isAllocating) return;
     const data = new FormData(e.target);
     const assetId = allocateModal.id;
     const employee = data.get('employee');
@@ -2562,6 +2619,10 @@ function App() {
       return;
     }
 
+    // From here on the button shows a spinner and is disabled. The finally block
+    // clears it, so it re-enables on failure and after a successful close alike.
+    setIsAllocating(true);
+    try {
     if (isApiConnected) {
       try {
         await api.createAssignment({
@@ -2634,6 +2695,9 @@ function App() {
     await addAuditLog("Asset Allocation", `Assigned ${qty} units of ${assetId} to ${employee}`);
     addToast("Asset Allocated", `Asset ${assetId} (${qty} units) assigned to ${employee}.`, "success");
     setAllocateModal(null);
+    } finally {
+      setIsAllocating(false);
+    }
   };
 
   // Handle asset transfer
@@ -4003,7 +4067,6 @@ function App() {
     }
   };
 
-  const selectedEmail = emails.find(e => e.id === selectedEmailId) || emails[0];
 
   if (activeTab === 'login') {
     return (
@@ -4036,16 +4099,24 @@ function App() {
 
   if (currentUser && currentUser.passwordResetRequired) {
     return (
+      // Fixed to the viewport rather than laid out inside #root. #root is a row flex
+      // container, so a plain min-height wrapper with no width shrank to the card and
+      // pinned it to the left edge — centered vertically but not horizontally.
+      // inset:0 guarantees the box is the whole viewport at every size; overflow:auto
+      // lets the card scroll on short screens instead of being clipped.
       <div style={{
+        position: 'fixed',
+        inset: 0,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        minHeight: '100vh',
-        background: 'var(--bg-main)',
+        background: 'var(--bg-app)',
         padding: '20px',
-        color: 'var(--text-main)'
+        overflowY: 'auto',
+        color: 'var(--text-primary)',
+        zIndex: 1000
       }}>
-        <div className="card" style={{ maxWidth: '400px', width: '100%', padding: '32px' }}>
+        <div className="card" style={{ maxWidth: '400px', width: '100%', padding: '32px', margin: 'auto' }}>
           <h2 style={{ margin: '0 0 10px', fontSize: '20px', fontWeight: 700 }}>Update Password Required</h2>
           <p style={{ margin: '0 0 24px', fontSize: '13px', color: 'var(--text-secondary)' }}>
             This is your first login. For security reasons, please change your temporary password to a secure new password.
@@ -4148,10 +4219,12 @@ function App() {
             </button>
           )}
 
-          <button onClick={() => navigate('documents')} className={`nav-item ${activeTab === 'documents' ? 'active' : ''}`}>
-            <FolderOpen className="nav-icon" />
-            Document Repository
-          </button>
+          {hasPermission('viewDocuments') && (
+            <button onClick={() => navigate('documents')} className={`nav-item ${activeTab === 'documents' ? 'active' : ''}`}>
+              <FolderOpen className="nav-icon" />
+              Document Repository
+            </button>
+          )}
 
           <button onClick={() => navigate('qr_lookup')} className={`nav-item ${activeTab === 'qr_lookup' ? 'active' : ''}`}>
             <QrCode className="nav-icon" />
@@ -5935,7 +6008,19 @@ function App() {
               )}
             </>
           )}{/* ==================== DOCUMENT REPOSITORY ==================== */}
-          {activeTab === 'documents' && (
+          {activeTab === 'documents' && !hasPermission('viewDocuments') && (
+            <div className="card">
+              <div className="empty-state">
+                <div className="empty-state-icon"><FolderOpen size={22} /></div>
+                <div className="empty-state-title">Access restricted</div>
+                <div className="empty-state-desc">
+                  Your role ({currentRole}) is not permitted to view the Document Repository.
+                  Contact an administrator if you need access.
+                </div>
+              </div>
+            </div>
+          )}
+          {activeTab === 'documents' && hasPermission('viewDocuments') && (
             <>
               <div className="page-header">
                 <div className="page-title-section">
@@ -6386,53 +6471,17 @@ function App() {
 
           {/* ==================== MOCK EMAILS INBOX ==================== */}
           {activeTab === 'emails' && (
-            <>
-              <div className="page-header">
-                <div className="page-title-section">
-                  <span className="page-kicker">Stakeholder Alerts</span>
-                  <h1 className="page-title">Email Alerts Inbox</h1>
-                  <span className="page-subtitle">Auditable log of outgoing warnings sent to procurement and operations stakeholders</span>
-                </div>
-              </div>
-
-              <div className="email-inbox-grid">
-                <div className="email-list">
-                  {emails.map((eml) => (
-                    <div
-                      key={eml.id}
-                      className={`email-item ${selectedEmailId === eml.id ? 'active' : ''}`}
-                      onClick={() => setSelectedEmailId(eml.id)}
-                    >
-                      <div className="email-header-row">
-                        <span className="email-sender">{eml.sender}</span>
-                        <span className="email-date">{eml.date}</span>
-                      </div>
-                      <div className="email-subj">{eml.subject}</div>
-                      <div className="email-body-preview">{eml.body}</div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="email-detail-view">
-                  {selectedEmail ? (
-                    <>
-                      <div className="email-detail-header">
-                        <h2 className="email-detail-subject">{selectedEmail.subject}</h2>
-                        <div className="email-detail-meta">
-                          <span>From: <strong>{selectedEmail.sender}</strong></span>
-                          <span>{selectedEmail.date}</span>
-                        </div>
-                      </div>
-                      <div className="email-detail-body">
-                        {selectedEmail.body}
-                      </div>
-                    </>
-                  ) : (
-                    <div className="email-detail-empty">No email selected</div>
-                  )}
-                </div>
-              </div>
-            </>
+            <EmailInboxModule
+              emails={emails}
+              setEmails={setEmails}
+              selectedEmailId={selectedEmailId}
+              setSelectedEmailId={setSelectedEmailId}
+              notifications={notifications}
+              setNotifications={setNotifications}
+              currentRole={currentRole}
+              addToast={addToast}
+              isApiConnected={isApiConnected}
+            />
           )}
 
           {/* ==================== USER DIRECTORY TAB ==================== */}
@@ -6688,8 +6737,20 @@ function App() {
           maxWidth="450px"
           footer={
             <>
-              <button type="button" className="btn btn-secondary" onClick={() => setAllocateModal(null)}>Cancel</button>
-              <button type="submit" className="btn btn-primary" disabled={allocateModal.availableQuantity === 0}>Authorize Allocation</button>
+              <button type="button" className="btn btn-secondary" onClick={() => setAllocateModal(null)} disabled={isAllocating}>Cancel</button>
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={allocateModal.availableQuantity === 0 || isAllocating}
+                style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+              >
+                {isAllocating ? (
+                  <>
+                    <RefreshCw size={14} className="animate-spin" />
+                    Authorizing…
+                  </>
+                ) : 'Authorize Allocation'}
+              </button>
 
             </>
           }
