@@ -6,6 +6,7 @@ import * as XLSX from 'xlsx'
 import { silk } from './engine/motion'
 import { openStoredFile } from './files'
 import NotificationSettingsPage from './NotificationSettingsPage'
+import KnowledgeBasePage from './KnowledgeBasePage'
 import {
   LayoutDashboard,
   Package,
@@ -14,7 +15,7 @@ import {
   FileText,
   FolderOpen,
   QrCode,
-  ClipboardList,
+  ClipboardList, BookOpen,
   Bell,
   Search,
   AlertCircle,
@@ -1796,7 +1797,7 @@ function App() {
     const session = mockAuthService.getCurrentSession();
     if (!session) return 'login';
     const hash = window.location.hash.replace('#/', '');
-    const validTabs = ['dashboard', 'assets', 'allocations', 'amc', 'finance', 'documents', 'qr_lookup', 'reports', 'emails', 'tickets'];
+    const validTabs = ['dashboard', 'assets', 'allocations', 'amc', 'finance', 'documents', 'qr_lookup', 'reports', 'emails', 'tickets', 'knowledge_base'];
     return hash && validTabs.includes(hash) ? hash : 'dashboard';
   });
   const [currentRole, setCurrentRole] = useState(() => {
@@ -2147,7 +2148,7 @@ function App() {
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash.replace('#/', '');
-      const validTabs = ['dashboard', 'assets', 'allocations', 'amc', 'finance', 'documents', 'qr_lookup', 'reports', 'emails', 'users', 'tickets'];
+      const validTabs = ['dashboard', 'assets', 'allocations', 'amc', 'finance', 'documents', 'qr_lookup', 'reports', 'emails', 'users', 'tickets', 'knowledge_base'];
       
       const session = mockAuthService.getCurrentSession();
       if (!session) {
@@ -4010,6 +4011,11 @@ function App() {
           <button onClick={() => navigate('tickets')} className={`nav-item ${activeTab === 'tickets' ? 'active' : ''}`}>
             <ClipboardList className="nav-icon" />
             Support Tickets
+          </button>
+
+          <button onClick={() => navigate('knowledge_base')} className={`nav-item ${activeTab === 'knowledge_base' ? 'active' : ''}`}>
+            <BookOpen className="nav-icon" />
+            Knowledge Base
           </button>
 
           {currentRole === 'Super Admin' && (
@@ -6189,6 +6195,14 @@ function App() {
               currentRole={currentRole}
               currentUser={currentUser}
               usersList={usersList}
+              addToast={addToast}
+            />
+          )}
+
+          {/* ==================== KNOWLEDGE BASE TAB ==================== */}
+          {activeTab === 'knowledge_base' && (
+            <KnowledgeBasePage
+              currentRole={currentRole}
               addToast={addToast}
             />
           )}

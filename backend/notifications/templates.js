@@ -58,6 +58,26 @@ const templates = {
     sms: `AssetFlow: ticket ${c.ticketId} is now ${c.status}`
   }),
 
+  'ticket.priority_changed': (c) => ({
+    type: c.priority === 'Critical' ? 'error' : 'info',
+    subject: `[${c.ticketId}] Priority changed to ${c.priority}`,
+    inApp: `Ticket ${c.ticketId} priority changed from ${c.previousPriority} to ${c.priority}`,
+    email:
+      `Ticket ${c.ticketId} ("${c.subject}") changed priority.\n\n` +
+      `Previous: ${c.previousPriority}\nCurrent:  ${c.priority}\nUpdated by: ${c.actorName}\n\n— AssetFlow Service Desk`,
+    sms: `AssetFlow: ticket ${c.ticketId} priority is now ${c.priority}`
+  }),
+
+  'ticket.reopened': (c) => ({
+    type: 'warning',
+    subject: `[${c.ticketId}] Reopened`,
+    inApp: `Ticket ${c.ticketId} has been reopened`,
+    email:
+      `Ticket ${c.ticketId} ("${c.subject}") was reopened by ${c.actorName} after being ${c.previousStatus}.\n\n` +
+      `Recommended action: review the original resolution and continue work.\n\n— AssetFlow Service Desk`,
+    sms: `AssetFlow: ticket ${c.ticketId} reopened`
+  }),
+
   'ticket.resolved': (c) => ({
     type: 'info',
     subject: `[${c.ticketId}] Resolved`,

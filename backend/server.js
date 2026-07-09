@@ -10,6 +10,7 @@ const { runMigrations } = require('./migrations');
 const storage = require('./storage');
 const notifications = require('./notifications');
 const scheduler = require('./notifications/scheduler');
+const knowledgeBase = require('./knowledgeBase');
 
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
@@ -1028,6 +1029,29 @@ const requireUser = (req, res) => {
   return user;
 };
 
+/**
+ * Like requireUser, but guarantees `department` is populated. Tokens issued before
+ * department was added to the JWT payload do not carry it, and the ticket queue
+ * filters on department — those users would otherwise see nothing until their token
+ * expired. Falls back to a lookup, so old sessions keep working.
+ */
+const requireUserWithDepartment = async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return null;
+  if (user.department !== undefined && user.department !== null) return user;
+
+  try {
+    const { rows } = await db.query('SELECT department, name FROM users WHERE id = $1', [user.id]);
+    if (rows[0]) {
+      user.department = rows[0].department;
+      user.name = user.name || rows[0].name;
+    }
+  } catch (err) {
+    console.warn('Could not resolve department for user', user.id, err.message);
+  }
+  return user;
+};
+
 const validateAndFormatPhone = (phone) => {
   if (!phone) return { isValid: true, value: '' };
   const cleaned = String(phone).replace(/[\s\-\(\)]/g, '');
@@ -1874,11 +1898,18 @@ const mapTicket = (row) => ({
   createdByName: row.created_by_name,
   assignedTo: row.assigned_to,
   assignedToName: row.assigned_to_name,
+  ticketType: row.ticket_type || 'Incident',
   slaDeadline: row.sla_deadline,
   resolvedAt: row.resolved_at,
   closedAt: row.closed_at,
   createdAt: row.created_at,
-  updatedAt: row.updated_at
+  updatedAt: row.updated_at,
+  escalated: row.escalated || false,
+  escalatedAt: row.escalated_at,
+  // Wall-clock hours from creation to resolution, for the tracking panel.
+  resolutionHours: row.resolved_at
+    ? Math.max(0, Math.round((new Date(row.resolved_at) - new Date(row.created_at)) / 36e5 * 10) / 10)
+    : null
 });
 
 const mapComment = (row) => ({
@@ -1914,7 +1945,7 @@ const mapAttachment = (row) => ({
 });
 
 app.get('/api/tickets', async (req, res) => {
-  const user = requireUser(req, res);
+  const user = await requireUserWithDepartment(req, res);
   if (!user) return;
 
   let query = 'SELECT * FROM tickets';
@@ -2147,7 +2178,7 @@ app.post('/api/tickets/bulk/delete', async (req, res) => {
 
 app.get('/api/tickets/:id', async (req, res) => {
   const { id } = req.params;
-  const user = requireUser(req, res);
+  const user = await requireUserWithDepartment(req, res);
   if (!user) return;
 
   try {
@@ -2194,12 +2225,23 @@ app.get('/api/tickets/:id', async (req, res) => {
 });
 
 app.post('/api/tickets', async (req, res) => {
-  const { subject, description, department, priority, attachments } = req.body;
+  const { subject, description, department, priority, attachments, category } = req.body;
   const user = requireUser(req, res);
   if (!user) return;
 
   if (!subject || !description || !department || !priority) {
     return res.status(400).json({ error: 'Subject, description, department, and priority are required.' });
+  }
+
+  // Defaults keep older clients — which send neither field — working unchanged.
+  const ticketType = req.body.ticketType || 'Incident';
+  if (!knowledgeBase.TICKET_TYPES.includes(ticketType)) {
+    return res.status(400).json({ error: `Ticket type must be one of: ${knowledgeBase.TICKET_TYPES.join(', ')}` });
+  }
+  // Existing tickets carry departments outside the helpdesk queues (e.g. Finance),
+  // so this only constrains new ones.
+  if (!knowledgeBase.HELPDESK_DEPARTMENTS.includes(department)) {
+    return res.status(400).json({ error: `Department must be one of: ${knowledgeBase.HELPDESK_DEPARTMENTS.join(', ')}` });
   }
 
   let slaHours = 24;
@@ -2213,17 +2255,24 @@ app.post('/api/tickets', async (req, res) => {
   try {
     await client.query('BEGIN');
 
+    // `category` was previously accepted from the client and then silently dropped
+    // from the INSERT, so every ticket fell back to the column default.
     const insertQuery = `
-      INSERT INTO tickets (subject, description, department, priority, status, created_by, created_by_name, sla_deadline, ticket_id)
-      VALUES ($1, $2, $3, $4, 'Open', $5, $6, $7, '')
+      INSERT INTO tickets (subject, description, department, priority, status, created_by, created_by_name, sla_deadline, ticket_id, category, ticket_type)
+      VALUES ($1, $2, $3, $4, 'Open', $5, $6, $7, '', $8, $9)
       RETURNING *;
     `;
     const result = await client.query(insertQuery, [
-      subject, description, department, priority, user.id, user.name || user.username, slaDeadline
+      subject, description, department, priority, user.id, user.name || user.username, slaDeadline,
+      category || 'Software', ticketType
     ]);
     const ticket = result.rows[0];
 
-    const deptCode = department === 'IT' ? 'IT' : department === 'HR' ? 'HR' : department === 'Finance' ? 'FIN' : department.substring(0, 3).toUpperCase();
+    const deptCode = department === 'IT' ? 'IT'
+      : department === 'HR' ? 'HR'
+      : department === 'Administration' ? 'ADM'
+      : department === 'Finance' ? 'FIN'
+      : department.substring(0, 3).toUpperCase();
     const ticketId = `${deptCode}-${String(ticket.id).padStart(6, '0')}`;
     await client.query('UPDATE tickets SET ticket_id = $1 WHERE id = $2', [ticketId, ticket.id]);
     ticket.ticket_id = ticketId;
@@ -2418,10 +2467,11 @@ app.patch('/api/tickets/:id/status', async (req, res) => {
       closedAt = now;
     }
 
-    await db.query(`
+    const updated = await db.query(`
       UPDATE tickets
       SET status = $1, resolved_at = $2, closed_at = $3, updated_at = NOW()
       WHERE id = $4
+      RETURNING updated_at
     `, [status, resolvedAt, closedAt, ticket.id]);
 
     await db.query(`
@@ -2434,15 +2484,23 @@ app.patch('/api/tickets/:id/status', async (req, res) => {
       VALUES ($1, $2, 'Ticket Status Update', $3)
     `, [new Date().toLocaleString(), user.name || user.username, `Updated Ticket ${ticket.ticket_id} status from ${prevStatus} to ${status}`]);
 
-    // Resolved and Closed are distinct events with their own wording; everything
-    // else is a plain status change. The event key includes the new status so a
-    // reopened ticket can legitimately announce each transition once.
+    // Resolved and Closed are distinct events with their own wording; moving *out* of
+    // either back into an active state is a reopen. Everything else is a plain status
+    // change. The event key includes the new status so each transition announces once,
+    // and a genuine reopen after a previous reopen is keyed by its own timestamp.
+    const isReopen = ['Resolved', 'Closed'].includes(prevStatus) && !['Resolved', 'Closed'].includes(status);
     const eventType =
+      isReopen ? 'ticket.reopened' :
       status === 'Resolved' ? 'ticket.resolved' :
       status === 'Closed' ? 'ticket.closed' :
       'ticket.status_changed';
 
-    notifications.notify(eventType, `ticket-status:${ticket.id}:${status}`, {
+    // Keyed on the transition's own timestamp. Keying on the status alone would
+    // suppress a legitimate re-resolve after a reopen, while a retried request lands
+    // on the same updated_at and is still deduplicated.
+    const eventKey = `ticket-status:${ticket.id}:${status}:${updated.rows[0].updated_at.toISOString()}`;
+
+    notifications.notify(eventType, eventKey, {
       ticketId: ticket.ticket_id,
       subject: ticket.subject,
       department: ticket.department,
@@ -2485,11 +2543,17 @@ app.patch('/api/tickets/:id/priority', async (req, res) => {
       VALUES ($1, $2, 'Priority Changed', $3)
     `, [ticket.id, user.name || user.username, `Priority changed from ${prevPriority} to ${priority}`]);
 
-    const notifId = `NTF-PRI-${ticket.ticket_id}-${Date.now()}`;
-    await db.query(`
-      INSERT INTO notifications (id, text, type, time, read)
-      VALUES ($1, $2, 'info', 'Just now', FALSE)
-    `, [notifId, `Ticket ${ticket.ticket_id} priority updated to ${priority}`]);
+    notifications.notify('ticket.priority_changed', `ticket-priority:${ticket.id}:${priority}:${Date.now()}`, {
+      ticketId: ticket.ticket_id,
+      subject: ticket.subject,
+      department: ticket.department,
+      priority,
+      previousPriority: prevPriority,
+      actorName: user.name || user.username,
+      createdBy: ticket.created_by,
+      assignedTo: ticket.assigned_to,
+      assignedToName: ticket.assigned_to_name
+    });
 
     res.json({ message: 'Priority updated successfully', priority });
   } catch (err) {
@@ -2726,9 +2790,11 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid username or password.' });
     }
 
-    // Generate JWT token
+    // `department` and `name` are signed in because the ticket queue routes on them.
+    // Without department, non-admin agents matched `WHERE department = ''` and saw an
+    // empty queue.
     const token = jwt.sign(
-      { id: user.id, username: user.username, role: user.role },
+      { id: user.id, username: user.username, role: user.role, name: user.name, department: user.department },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
@@ -3221,6 +3287,10 @@ cron.schedule('0 * * * *', () => scheduler.runSlaChecks());     // hourly, on th
 cron.schedule('*/15 * * * *', () => {                            // retry failed sends
   notifications.retryFailed().catch((err) => console.error('Notification retry failed:', err));
 });
+
+// --- KNOWLEDGE BASE + HELPDESK OPTIONS ---
+// Registered before the catch-all so its routes are reachable.
+knowledgeBase.register(app, { requireUser });
 
 // --- 404 handler for unmatched API routes (JSON, not Express's default HTML page) ---
 app.use('/api', (req, res) => {

@@ -293,5 +293,33 @@ export const api = {
   bulkAssignTickets: (ticketIds, assignToUserId) => apiFetch('/tickets/bulk/assign', { method: 'POST', body: JSON.stringify({ ticketIds, assignToUserId }) }),
   bulkDeleteTickets: (ticketIds) => apiFetch('/tickets/bulk/delete', { method: 'POST', body: JSON.stringify({ ticketIds }) }),
   autoAssignTicket: (id) => apiFetch(`/tickets/${id}/auto-assign`, { method: 'POST' }),
-  getTicketsAnalytics: () => apiFetch('/tickets-analytics')
+  getTicketsAnalytics: () => apiFetch('/tickets-analytics'),
+
+  // Helpdesk + Knowledge Base
+  getHelpdeskOptions: () => apiFetch('/helpdesk/options'),
+
+  getKbCategories: () => apiFetch('/kb/categories'),
+  createKbCategory: (category) => apiFetch('/kb/categories', { method: 'POST', body: JSON.stringify(category) }),
+  deleteKbCategory: (id) => apiFetch(`/kb/categories/${id}`, { method: 'DELETE' }),
+
+  getKbArticles: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '' && v !== false)
+    ).toString();
+    return apiFetch(`/kb/articles${qs ? `?${qs}` : ''}`);
+  },
+  getKbArticle: (idOrSlug) => apiFetch(`/kb/articles/${idOrSlug}`),
+  createKbArticle: (article) => apiFetch('/kb/articles', { method: 'POST', body: JSON.stringify(article) }),
+  updateKbArticle: (id, fields) => apiFetch(`/kb/articles/${id}`, { method: 'PATCH', body: JSON.stringify(fields) }),
+  deleteKbArticle: (id) => apiFetch(`/kb/articles/${id}`, { method: 'DELETE' }),
+
+  // Typeahead for the ticket form. Never throws: a failing suggestion lookup must not
+  // block the user from filing a ticket.
+  suggestKbArticles: async (q) => {
+    try {
+      return await apiFetch(`/kb/suggest?q=${encodeURIComponent(q)}`);
+    } catch {
+      return [];
+    }
+  }
 };

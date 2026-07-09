@@ -183,6 +183,91 @@ const runMigrations = async () => {
       ALTER TABLE tickets ADD COLUMN IF NOT EXISTS escalated_at TIMESTAMP WITH TIME ZONE;
     `);
 
+    // 7c. Unified helpdesk: ticket type. Defaulting to 'Incident' means every existing
+    //     ticket gets a sensible value without a backfill, and old clients that omit
+    //     the field keep working.
+    await db.directQuery(`
+      ALTER TABLE tickets ADD COLUMN IF NOT EXISTS ticket_type VARCHAR(30) NOT NULL DEFAULT 'Incident';
+      CREATE INDEX IF NOT EXISTS tickets_department_idx ON tickets (department);
+      CREATE INDEX IF NOT EXISTS tickets_created_by_idx ON tickets (created_by);
+    `);
+
+    // 7d. Knowledge Base.
+    await db.directQuery(`
+      CREATE TABLE IF NOT EXISTS kb_categories (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) UNIQUE NOT NULL,
+        description TEXT,
+        department VARCHAR(50),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    await db.directQuery(`
+      CREATE TABLE IF NOT EXISTS kb_articles (
+        id SERIAL PRIMARY KEY,
+        slug VARCHAR(160) UNIQUE NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        summary TEXT,
+        body TEXT NOT NULL,
+        category_id INT REFERENCES kb_categories(id) ON DELETE SET NULL,
+        is_faq BOOLEAN NOT NULL DEFAULT FALSE,
+        is_published BOOLEAN NOT NULL DEFAULT FALSE,
+        author_id INT REFERENCES users(id) ON DELETE SET NULL,
+        author_name VARCHAR(255),
+        view_count INT NOT NULL DEFAULT 0,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Weighted full-text index. A generated column keeps it in step with the row
+    // automatically; to_tsvector with a literal regconfig is IMMUTABLE, which is what
+    // GENERATED ALWAYS requires. Title matches outrank body matches.
+    await db.directQuery(`
+      ALTER TABLE kb_articles ADD COLUMN IF NOT EXISTS search_vector tsvector
+        GENERATED ALWAYS AS (
+          setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
+          setweight(to_tsvector('english', coalesce(summary, '')), 'B') ||
+          setweight(to_tsvector('english', coalesce(body, '')), 'C')
+        ) STORED;
+      CREATE INDEX IF NOT EXISTS kb_articles_search_idx ON kb_articles USING GIN (search_vector);
+      CREATE INDEX IF NOT EXISTS kb_articles_published_idx ON kb_articles (is_published);
+    `);
+
+    await db.directQuery(`
+      CREATE TABLE IF NOT EXISTS kb_article_attachments (
+        id SERIAL PRIMARY KEY,
+        article_id INT REFERENCES kb_articles(id) ON DELETE CASCADE,
+        file_name VARCHAR(255) NOT NULL,
+        file_path VARCHAR(255) NOT NULL,
+        file_type VARCHAR(100),
+        file_size VARCHAR(50),
+        uploaded_by VARCHAR(255),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Symmetric "related articles" edges. The CHECK stops an article relating to
+    // itself; the primary key stops duplicate edges.
+    await db.directQuery(`
+      CREATE TABLE IF NOT EXISTS kb_related_articles (
+        article_id INT NOT NULL REFERENCES kb_articles(id) ON DELETE CASCADE,
+        related_article_id INT NOT NULL REFERENCES kb_articles(id) ON DELETE CASCADE,
+        PRIMARY KEY (article_id, related_article_id),
+        CONSTRAINT kb_related_not_self CHECK (article_id <> related_article_id)
+      );
+    `);
+
+    // Seed the three helpdesk categories once, so the KB is not empty on first run.
+    await db.directQuery(`
+      INSERT INTO kb_categories (name, description, department) VALUES
+        ('IT Support', 'Hardware, software, access and connectivity', 'IT'),
+        ('Administration', 'Facilities, procurement and office services', 'Administration'),
+        ('Human Resources', 'Payroll, leave, onboarding and policy', 'HR')
+      ON CONFLICT (name) DO NOTHING;
+    `);
+
     // 8. Update seeded users to have departments and metadata
     await db.directQuery(`
       UPDATE users SET department = 'IT', designation = 'IT Administrator', status = 'Active', employee_id = 'EMP-IT01' WHERE username = 'itadmin' AND department IS NULL;

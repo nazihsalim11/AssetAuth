@@ -3,16 +3,33 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Plus, Eye, MessageSquare, AlertCircle, Clock, ChevronDown, Check, 
   Trash2, Send, Paperclip, ClipboardList, Info, FileText, CheckCircle2,
-  Users, User, UserCheck, AlertTriangle, X, Search, Filter, ArrowLeft, RefreshCw, 
+  Users, User, UserCheck, AlertTriangle, X, Search, Filter, ArrowLeft, RefreshCw, BookOpen, Lightbulb, 
   Layers, CheckSquare, Square, Building, ShieldCheck, Mail, Tag, HelpCircle
 } from 'lucide-react';
 import { api } from './api';
 import { openStoredFile } from './files';
+import Markdown from './Markdown';
 
 const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addToast }) => {
   const [tickets, setTickets] = useState([]);
   const [activeTicket, setActiveTicket] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+
+  // Unified helpdesk: the requester now chooses the queue. Default to their own
+  // department when it is one of the helpdesk queues, otherwise IT.
+  const HELPDESK_DEPARTMENTS = [
+    { value: 'IT', label: 'IT Support' },
+    { value: 'Administration', label: 'Administration' },
+    { value: 'HR', label: 'Human Resources' }
+  ];
+  const TICKET_TYPES = ['Incident', 'Service Request', 'General Query'];
+  const defaultDept = HELPDESK_DEPARTMENTS.some(d => d.value === currentUser?.department)
+    ? currentUser.department
+    : 'IT';
+  const [ticketDepartment, setTicketDepartment] = useState(defaultDept);
+  const [ticketType, setTicketType] = useState('Incident');
+  const [kbSuggestions, setKbSuggestions] = useState([]);
+  const [kbArticlePreview, setKbArticlePreview] = useState(null);
   const [subject, setSubject] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState('Software');
@@ -181,13 +198,27 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
   };
 
   // Create Ticket
+  // Suggest knowledge base articles as the subject is typed. Debounced so each
+  // keystroke does not hit the database; api.suggestKbArticles never throws, so a
+  // failing lookup can never block someone from filing a ticket.
+  useEffect(() => {
+    if (!showCreateModal || !isApiConnected || subject.trim().length < 3) {
+      setKbSuggestions([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setKbSuggestions(await api.suggestKbArticles(subject.trim()));
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [subject, showCreateModal, isApiConnected]);
+
   const handleCreateTicket = async (e) => {
     e.preventDefault();
     if (isFiling) return;
     if (!subject.trim() || !description.trim()) return;
 
     setIsFiling(true);
-    const targetDept = currentUser?.department || 'IT';
+    const targetDept = ticketDepartment;
     let slaHours = 24;
     if (priority === 'Critical') slaHours = 10;
     else if (priority === 'Low') slaHours = 48;
@@ -203,6 +234,7 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
           department: targetDept,
           priority,
           category,
+          ticketType,
           attachments: uploadedAttachments
         });
         addToast("Ticket Created", `Ticket ${newTicket.ticketId} has been created successfully.`, "success");
@@ -210,6 +242,9 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
         setSubject('');
         setDescription('');
         setCategory('Software');
+        setTicketType('Incident');
+        setTicketDepartment(defaultDept);
+        setKbSuggestions([]);
         setUploadedAttachments([]);
         loadTickets();
       } catch (err) {
@@ -231,6 +266,7 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
         description,
         department: targetDept,
         category,
+        ticketType,
         priority,
         status: 'Open',
         createdBy: currentUser?.id || 1,
@@ -1399,6 +1435,20 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
                       </span>
                       <span>Created: <strong>{activeTicket.createdAt ? new Date(activeTicket.createdAt).toLocaleString('en-IN') : '—'}</strong></span>
                       <span>Last Updated: <strong>{activeTicket.updatedAt ? new Date(activeTicket.updatedAt).toLocaleString('en-IN') : '—'}</strong></span>
+                      <span>Type: <strong>{activeTicket.ticketType || 'Incident'}</strong></span>
+                      <span>Department: <strong>{activeTicket.department}</strong></span>
+                      <span>Priority: <strong>{activeTicket.priority}</strong></span>
+                      <span>Agent: <strong>{activeTicket.assignedToName || 'Unassigned'}</strong></span>
+                      {activeTicket.resolutionHours !== null && activeTicket.resolutionHours !== undefined && (
+                        <span style={{ color: 'var(--status-available)' }}>
+                          Resolved in: <strong>{activeTicket.resolutionHours}h</strong>
+                        </span>
+                      )}
+                      {activeTicket.escalated && (
+                        <span style={{ color: 'var(--status-disposed)', fontWeight: 600 }}>
+                          <AlertTriangle size={12} style={{ verticalAlign: '-2px' }} /> Escalated
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div>
@@ -1660,17 +1710,32 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
             <form onSubmit={handleCreateTicket}>
               <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                 
-                {/* Auto assign department notice */}
+                {/* Unified helpdesk: the requester chooses the queue. Previously this was
+                    auto-routed from their own profile, so an HR employee's IT problem
+                    was filed to the HR queue. */}
                 <div className="form-group">
-                  <label className="form-label">Service Queue Department</label>
-                  <div style={{ padding: '10px 14px', background: 'var(--bg-sidebar)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: '13px', fontWeight: '700', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Building size={16} />
-                    {currentUser?.department || 'IT'} Department (Auto-Routed based on your profile)
-                  </div>
+                  <label className="form-label">Service Queue Department *</label>
+                  <select className="form-input" value={ticketDepartment} onChange={e => setTicketDepartment(e.target.value)} required disabled={isFiling}>
+                    {HELPDESK_DEPARTMENTS.map(d => (
+                      <option key={d.value} value={d.value}>{d.label}</option>
+                    ))}
+                  </select>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    <Building size={11} style={{ verticalAlign: '-1px' }} /> Routed to the {HELPDESK_DEPARTMENTS.find(d => d.value === ticketDepartment)?.label} team.
+                  </span>
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">Category Ticket Type *</label>
+                  <label className="form-label">Ticket Type *</label>
+                  <select className="form-input" value={ticketType} onChange={e => setTicketType(e.target.value)} required disabled={isFiling}>
+                    {TICKET_TYPES.map(t => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Category *</label>
                   <select className="form-input" value={category} onChange={e => setCategory(e.target.value)} required>
                     {distinctCategories.map(cat => (
                       <option key={cat} value={cat}>{cat}</option>
@@ -1699,6 +1764,53 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
                     disabled={isFiling}
                   />
                 </div>
+
+                {/* Deflection: surface matching knowledge base articles before the
+                    user commits to a ticket. Opening one is offered as an alternative,
+                    never a replacement — the form stays exactly as it was. */}
+                {kbSuggestions.length > 0 && (
+                  <div style={{
+                    border: '1px solid var(--primary-glow)',
+                    background: 'var(--primary-soft)',
+                    borderRadius: 'var(--radius-lg)',
+                    padding: '14px 16px'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                      <Lightbulb size={15} style={{ color: 'var(--primary)' }} />
+                      <span style={{ fontWeight: 600, fontSize: '13px' }}>
+                        {kbSuggestions.length} article{kbSuggestions.length === 1 ? '' : 's'} may already answer this
+                      </span>
+                    </div>
+                    <div style={{ display: 'grid', gap: '6px' }}>
+                      {kbSuggestions.map(a => (
+                        <button
+                          key={a.id}
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ justifyContent: 'flex-start', textAlign: 'left', height: 'auto', padding: '8px 12px' }}
+                          onClick={async () => {
+                            try {
+                              setKbArticlePreview(await api.getKbArticle(a.id));
+                            } catch (err) {
+                              addToast('Error', err.message || 'Could not open the article.', 'error');
+                            }
+                          }}
+                        >
+                          <BookOpen size={14} style={{ flexShrink: 0 }} />
+                          <span style={{ display: 'flex', flexDirection: 'column', gap: '1px', minWidth: 0 }}>
+                            <span style={{ fontWeight: 600 }}>{a.title}</span>
+                            {a.summary && (
+                              <span style={{ fontSize: '11.5px', color: 'var(--text-muted)', fontWeight: 400 }}>{a.summary}</span>
+                            )}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                    <span style={{ display: 'block', marginTop: '10px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                      Still stuck? Carry on filling in the form below.
+                    </span>
+                  </div>
+                )}
 
                 <div className="form-group">
                   <label className="form-label">Detailed Description *</label>
@@ -1772,6 +1884,57 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
         </div>
       )}
 
+      {/* Article preview, opened from the suggestions panel. Rendered above the create
+          modal so the half-filled form is preserved behind it. */}
+      {kbArticlePreview && (
+        <div className="modal-overlay" style={{ zIndex: 600 }} onClick={() => setKbArticlePreview(null)}>
+          <div className="modal-content" style={{ maxWidth: '760px' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div style={{ minWidth: 0 }}>
+                <h3 className="modal-title">{kbArticlePreview.title}</h3>
+                {kbArticlePreview.summary && (
+                  <span style={{ fontSize: '12.5px', color: 'var(--text-secondary)' }}>{kbArticlePreview.summary}</span>
+                )}
+              </div>
+              <button className="modal-close-btn" onClick={() => setKbArticlePreview(null)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <Markdown>{kbArticlePreview.body}</Markdown>
+              {kbArticlePreview.attachments?.length > 0 && (
+                <div className="attachment-preview-grid">
+                  {kbArticlePreview.attachments.map(a => (
+                    <div key={a.id} className="attachment-preview-card"
+                         onClick={() => openStoredFile(a.file_path, m => addToast('Cannot open file', m, 'error'))}>
+                      <FileText className="attachment-file-icon" size={22} />
+                      <span className="attachment-file-name" title={a.file_name}>{a.file_name}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setKbArticlePreview(null)}>
+                Back to my ticket
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  setKbArticlePreview(null);
+                  setShowCreateModal(false);
+                  setSubject('');
+                  setDescription('');
+                  setKbSuggestions([]);
+                  addToast('Glad that helped', 'No ticket was created.', 'success');
+                }}
+              >
+                This answered my question
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

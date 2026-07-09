@@ -110,6 +110,8 @@ async function resolveRecipients(eventType, ctx) {
       return uniqueById(await byIds([ctx.assignedTo, ctx.createdBy]));
 
     case 'ticket.status_changed':
+    case 'ticket.priority_changed':
+    case 'ticket.reopened':
     case 'ticket.resolved':
     case 'ticket.closed':
       return uniqueById(await byIds([ctx.createdBy, ctx.assignedTo]));
