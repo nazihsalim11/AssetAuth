@@ -53,10 +53,14 @@ export default function LoginView({ onLoginSuccess }) {
     }
   };
 
+  // The demo-accounts panel exposes usernames and passwords, so it is shown only in
+  // development. Production renders the login form alone, centred.
+  const showDemo = import.meta.env.DEV;
+
   return (
-    <div className="login-layout-container with-demo">
+    <div className={`login-layout-container ${showDemo ? 'with-demo' : ''}`}>
       {/* Spacer for centering the login form in a 3-column grid on desktop */}
-      <div className="login-spacer-left" />
+      {showDemo && <div className="login-spacer-left" />}
 
       {/* 1. Main Login Form Card */}
       <motion.div className="login-card" {...silk.entrance}>
@@ -154,7 +158,8 @@ export default function LoginView({ onLoginSuccess }) {
         </form>
       </motion.div>
 
-      {/* 2. Demo Credentials Side Card */}
+      {/* 2. Demo Credentials Side Card — development only */}
+      {showDemo && (
       <motion.div className="demo-creds-card" {...silk.entrance} transition={{ ...silk.entrance.transition, delay: 0.1 }}>
         <div style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '12px', marginBottom: '4px' }}>
           <h2 className="demo-creds-title">Demo Accounts</h2>
@@ -194,6 +199,7 @@ export default function LoginView({ onLoginSuccess }) {
           ))}
         </div>
       </motion.div>
+      )}
     </div>
   );
 }

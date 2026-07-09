@@ -43,7 +43,7 @@ import {
   ChevronRight
 } from 'lucide-react'
 import QRCode from 'qrcode'
-import { mockAuthService, DEMO_CREDENTIALS } from './auth'
+import { mockAuthService } from './auth'
 import LoginView from './LoginView'
 import { api } from './api'
 import BulkImportModal from './BulkImportModal'
@@ -416,18 +416,10 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
         status: formStatus
       };
 
-      if (isApiConnected) {
-        const { api: apiModule } = await import('./api');
-        const created = await apiModule.createUser(newUserPayload);
-        setUsersList(prev => [created, ...prev]);
-      } else {
-        const newUser = {
-          id: Date.now(),
-          ...newUserPayload,
-          created_at: new Date().toISOString()
-        };
-        setUsersList(prev => [newUser, ...prev]);
-      }
+      // Database-only: creation must go through the API. There is no local fallback.
+      const { api: apiModule } = await import('./api');
+      const created = await apiModule.createUser(newUserPayload);
+      setUsersList(prev => [created, ...prev]);
 
       setFormSuccess(`User "${formUsername.trim()}" created successfully!`);
       if (addToast) {
@@ -504,17 +496,9 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
         updatedFields.password = editFormPassword.trim();
       }
 
-      if (isApiConnected) {
-        const { api: apiModule } = await import('./api');
-        const updated = await apiModule.updateUser(editingUser.id, updatedFields);
-        setUsersList(prev => prev.map(u => u.id === editingUser.id ? updated : u));
-      } else {
-        const updated = {
-          ...editingUser,
-          ...updatedFields,
-        };
-        setUsersList(prev => prev.map(u => u.id === editingUser.id ? updated : u));
-      }
+      const { api: apiModule } = await import('./api');
+      const updated = await apiModule.updateUser(editingUser.id, updatedFields);
+      setUsersList(prev => prev.map(u => u.id === editingUser.id ? updated : u));
 
       setEditSuccess('User details updated successfully!');
       setTimeout(() => {
@@ -1330,429 +1314,26 @@ const UserManagementPage = ({ usersList, setUsersList, isApiConnected, rolePermi
   );
 };
 
-// Default Initial Mock Data
-const INITIAL_ASSETS = [
-  {
-    id: "AST-001",
-    name: "Dell XPS 15 Laptop",
-    serialNumber: "CN-0V2D6M-89102",
-    category: "IT",
-    type: "Laptops",
-    status: "Assigned",
-    cost: 1500,
-    purchaseDate: "2025-01-15",
-    warrantyExpiry: "2027-01-15",
-    department: "Engineering",
-    location: "New York HQ",
-    amcId: "",
-    invoiceId: "INV-101",
-    assignedEmployee: "Alice Johnson",
-    depreciationLifeYears: 4,
-    disposalDate: "",
-    disposalReason: "",
-    notes: "Developer workstation with 32GB RAM."
-  },
-  {
-    id: "AST-002",
-    name: "MacBook Pro 16\"",
-    serialNumber: "C02F87DKMD6R",
-    category: "IT",
-    type: "Laptops",
-    status: "Assigned",
-    cost: 2400,
-    purchaseDate: "2025-06-10",
-    warrantyExpiry: "2026-06-10",
-    department: "Engineering",
-    location: "London Branch",
-    amcId: "",
-    invoiceId: "INV-102",
-    assignedEmployee: "Bob Smith",
-    depreciationLifeYears: 3,
-    disposalDate: "",
-    disposalReason: "",
-    notes: "M3 Max, 64GB RAM, 1TB SSD."
-  },
-  {
-    id: "AST-003",
-    name: "Herman Miller Aeron Chair",
-    serialNumber: "HM-AER-98273",
-    category: "Office",
-    type: "Chairs",
-    status: "Available",
-    cost: 1200,
-    purchaseDate: "2024-09-05",
-    warrantyExpiry: "2029-09-05",
-    department: "HR",
-    location: "New York HQ",
-    amcId: "",
-    invoiceId: "INV-103",
-    assignedEmployee: "",
-    depreciationLifeYears: 10,
-    disposalDate: "",
-    disposalReason: "",
-    notes: "Ergonomic chair, size B."
-  },
-  {
-    id: "AST-004",
-    name: "Carrier 2-Ton Split AC",
-    serialNumber: "CR-AC-908273",
-    category: "Office",
-    type: "AC Units",
-    status: "Under Maintenance",
-    cost: 850,
-    purchaseDate: "2023-05-20",
-    warrantyExpiry: "2025-05-20",
-    department: "Operations",
-    location: "Tokyo Office",
-    amcId: "AMC-101",
-    invoiceId: "INV-104",
-    assignedEmployee: "",
-    depreciationLifeYears: 5,
-    disposalDate: "",
-    disposalReason: "",
-    notes: "Needs compressor servicing."
-  },
-  {
-    id: "AST-005",
-    name: "Dell 24\" IPS Monitor",
-    serialNumber: "CN-0M3892-1209",
-    category: "IT",
-    type: "Monitors",
-    status: "Assigned",
-    cost: 220,
-    purchaseDate: "2025-02-12",
-    warrantyExpiry: "2028-02-12",
-    department: "HR",
-    location: "London Branch",
-    amcId: "",
-    invoiceId: "INV-101",
-    assignedEmployee: "Charlie Brown",
-    depreciationLifeYears: 5,
-    disposalDate: "",
-    disposalReason: "",
-    notes: "Secondary display for HR workspace."
-  },
-  {
-    id: "AST-006",
-    name: "PowerEdge R750 Server",
-    serialNumber: "Dell-PE-R750-X82",
-    category: "IT",
-    type: "Servers",
-    status: "Available",
-    cost: 7500,
-    purchaseDate: "2024-11-01",
-    warrantyExpiry: "2027-11-01",
-    department: "IT",
-    location: "New York HQ Server Room",
-    amcId: "AMC-102",
-    invoiceId: "INV-105",
-    assignedEmployee: "",
-    depreciationLifeYears: 5,
-    disposalDate: "",
-    disposalReason: "",
-    notes: "Rack mount database server."
-  }
-];
-
-const INITIAL_AMCS = [
-  {
-    id: "AMC-101",
-    vendor: "Carrier CoolCare Services",
-    cost: 150,
-    startDate: "2026-01-01",
-    endDate: "2026-12-31",
-    mappedAssets: ["AST-004"],
-    serviceSchedule: "Quarterly",
-    agreementFile: "carrier_amc_2026.pdf",
-    serviceHistory: [
-      { date: "2026-02-15", type: "Routine Filter Cleaning", notes: "Done by tech John." },
-      { date: "2026-05-18", type: "Gas Recharge", notes: "Completed successfully." }
-    ]
-  },
-  {
-    id: "AMC-102",
-    vendor: "Dell Enterprise Support",
-    cost: 800,
-    startDate: "2026-06-01",
-    endDate: "2026-11-01",
-    mappedAssets: ["AST-006"],
-    serviceSchedule: "Bi-Annual",
-    agreementFile: "dell_support_agreement.pdf",
-    serviceHistory: [
-      { date: "2026-06-10", type: "Firmware Diagnostics", notes: "No hardware errors found." }
-    ]
-  }
-];
-
-const INITIAL_INVOICES = [
-  {
-    id: "INV-101",
-    poReference: "PO-2025-001",
-    vendor: "TechDistributors LLC",
-    amount: 1720,
-    gst: 18,
-    date: "2025-01-10",
-    paymentStatus: "Paid",
-    mappedAssets: ["AST-001", "AST-005"],
-    fileName: "invoice_101_techdist.pdf"
-  },
-  {
-    id: "INV-102",
-    poReference: "PO-2025-042",
-    vendor: "Apple Retail Corp.",
-    amount: 2400,
-    gst: 0,
-    date: "2025-06-05",
-    paymentStatus: "Paid",
-    mappedAssets: ["AST-002"],
-    fileName: "apple_invoice_MBP.pdf"
-  },
-  {
-    id: "INV-103",
-    poReference: "PO-2024-118",
-    vendor: "Office Space Solutions",
-    amount: 1200,
-    gst: 12,
-    date: "2024-09-01",
-    paymentStatus: "Paid",
-    mappedAssets: ["AST-003"],
-    fileName: "herman_miller_invoice.pdf"
-  },
-  {
-    id: "INV-104",
-    poReference: "PO-2023-089",
-    vendor: "Tokyo AC Retailers",
-    amount: 850,
-    gst: 10,
-    date: "2023-05-18",
-    paymentStatus: "Paid",
-    mappedAssets: ["AST-004"],
-    fileName: "carrier_ac_invoice.pdf"
-  },
-  {
-    id: "INV-105",
-    poReference: "PO-2024-902",
-    vendor: "Dell Commercial Sales",
-    amount: 7500,
-    gst: 18,
-    date: "2024-10-25",
-    paymentStatus: "Partially Paid",
-    mappedAssets: ["AST-006"],
-    fileName: "dell_invoice_R750.pdf"
-  },
-  {
-    id: "INV-106",
-    poReference: "PO-2026-004",
-    vendor: "Office Depot Corp.",
-    amount: 450,
-    gst: 12,
-    date: "2026-06-01",
-    paymentStatus: "Pending",
-    mappedAssets: [],
-    fileName: "stationery_invoice.pdf"
-  },
-  {
-    id: "INV-107",
-    poReference: "PO-2026-009",
-    vendor: "NetSupply Co.",
-    amount: 3500,
-    gst: 18,
-    date: "2026-05-10",
-    paymentStatus: "Overdue",
-    mappedAssets: [],
-    fileName: "switch_invoice_netsupply.pdf"
-  }
-];
-
-const INITIAL_DOCUMENTS = [
-  {
-    id: "DOC-001",
-    name: "dell_invoice_R750.pdf",
-    type: "Invoice",
-    size: "450 KB",
-    uploadDate: "2024-10-26",
-    association: "Invoice INV-105"
-  },
-  {
-    id: "DOC-002",
-    name: "carrier_amc_2026.pdf",
-    type: "AMC Agreement",
-    size: "1.2 MB",
-    uploadDate: "2026-01-02",
-    association: "AMC AMC-101"
-  },
-  {
-    id: "DOC-003",
-    name: "macbook_warranty_card.pdf",
-    type: "Warranty Certificate",
-    size: "820 KB",
-    uploadDate: "2025-06-11",
-    association: "Asset AST-002"
-  }
-];
-
-const INITIAL_MOVEMENTS = [
-  {
-    id: "MVT-001",
-    assetId: "AST-001",
-    date: "2025-01-15",
-    type: "Procurement",
-    from: "TechDistributors LLC",
-    to: "Inventory (New York HQ)",
-    actor: "Finance Team",
-    notes: "Purchased under PO-2025-001"
-  },
-  {
-    id: "MVT-002",
-    assetId: "AST-001",
-    date: "2025-01-16",
-    type: "Allocation",
-    from: "Inventory",
-    to: "Alice Johnson (HR)",
-    actor: "IT Admin",
-    notes: "Developer XPS assigned."
-  },
-  {
-    id: "MVT-003",
-    assetId: "AST-002",
-    date: "2025-06-10",
-    type: "Procurement",
-    from: "Apple Retail",
-    to: "Inventory (London)",
-    actor: "Finance Team",
-    notes: "Standard issue MacBook Pro"
-  },
-  {
-    id: "MVT-004",
-    assetId: "AST-002",
-    date: "2025-06-12",
-    type: "Allocation",
-    from: "Inventory",
-    to: "Bob Smith (Engineering)",
-    actor: "IT Admin",
-    notes: "Engineering laptop assigned."
-  },
-  {
-    id: "MVT-005",
-    assetId: "AST-004",
-    date: "2023-05-20",
-    type: "Procurement",
-    from: "Tokyo AC Retailers",
-    to: "Operations (Tokyo)",
-    actor: "Finance Team",
-    notes: "Office cooling infrastructure"
-  },
-  {
-    id: "MVT-006",
-    assetId: "AST-004",
-    date: "2025-07-01",
-    type: "Status Change",
-    from: "Available",
-    to: "Under Maintenance",
-    actor: "Facility Admin",
-    notes: "Sent for compressor servicing under AMC AMC-101"
-  }
-];
-
-const INITIAL_LOGS = [
-  {
-    id: "LOG-001",
-    timestamp: "2026-07-06 09:15 AM",
-    actor: "Super Admin",
-    action: "User Login",
-    detail: "System session initialized."
-  },
-  {
-    id: "LOG-002",
-    timestamp: "2026-07-06 10:20 AM",
-    actor: "IT Admin",
-    action: "Asset Allocation",
-    detail: "Assigned Dell XPS 15 (AST-001) to Alice Johnson."
-  },
-  {
-    id: "LOG-003",
-    timestamp: "2026-07-06 11:45 AM",
-    actor: "Finance Team",
-    action: "Invoice Upload",
-    detail: "Uploaded NetSupply Invoice INV-107, marked Overdue."
-  }
-];
-
-const INITIAL_EMAILS = [
-  {
-    id: "EML-001",
-    sender: "AssetFlow Monitor",
-    date: "2026-07-06 08:00 AM",
-    subject: "ALERT: Overdue Invoice Payments",
-    body: "Hi Team,\n\nThis is an automated alert. Invoice INV-107 from vendor NetSupply Co. amounting to ₹3,500.00 is currently marked as OVERDUE. Please review and process the payments immediately.\n\nRegards,\nAssetFlow Finance Bot"
-  },
-  {
-    id: "EML-002",
-    sender: "AMC Alerts Engine",
-    date: "2026-07-05 10:30 AM",
-    subject: "WARNING: Dell Enterprise Support Contract Expiring Soon",
-    body: "Attention Facilities/IT Admins,\n\nAMC Contract AMC-102 (Dell Enterprise Support) mapped to Asset AST-006 (PowerEdge R750 Server) is expiring on 2026-11-01 (within 120 days). Please coordinate with the vendor for renewals.\n\nRegards,\nContract Management Engine"
-  },
-  {
-    id: "EML-003",
-    sender: "Warranty Monitoring",
-    date: "2026-07-04 09:00 AM",
-    subject: "NOTIF: Warranty Expiry Warning for MacBook Pro",
-    body: "Dear Administrator,\n\nThe warranty of Asset AST-002 (MacBook Pro 16\", Serial: C02F87DKMD6R) will expire on 2026-06-10. Please log any pending hardware repairs prior to expiration.\n\nRegards,\nWarranty Engine"
-  }
-];
-
-const INITIAL_NOTIFICATIONS = [
-  { id: "NTF-001", text: "Invoice INV-107 from NetSupply Co. is OVERDUE (₹3,500)", type: "error", time: "2 hours ago", read: false },
-  { id: "NTF-002", text: "AMC Contract AMC-102 expiring soon (Dell Enterprise Support)", type: "warning", time: "1 day ago", read: false },
-  { id: "NTF-003", text: "Asset AST-004 (AC Unit) status set to Under Maintenance", type: "info", time: "5 days ago", read: true }
-];
-
-// Helper to initialize Local Storage
-const getStoredData = (key, fallback) => {
-  const stored = localStorage.getItem(key);
-  if (stored) {
-    try {
-      return JSON.parse(stored);
-    } catch {
-      return fallback;
-    }
-  }
-  localStorage.setItem(key, JSON.stringify(fallback));
-  return fallback;
-};
-
-// One-time purge of the persisted custodian registry. Earlier builds cached
-// assignments for assets and employees that were later deleted, and the bootstrap
-// refused to overwrite the cache with an empty server response — so those rows
-// survived every reload. Dropping the key once lets the server repopulate from
-// scratch. Bump the version if the cache ever needs invalidating again.
-const ASSIGNMENTS_CACHE_VERSION = '2';
-try {
-  if (localStorage.getItem('db_assignments_cache_version') !== ASSIGNMENTS_CACHE_VERSION) {
-    localStorage.removeItem('db_assignments');
-    localStorage.setItem('db_assignments_cache_version', ASSIGNMENTS_CACHE_VERSION);
-  }
-} catch {
-  // localStorage unavailable (private mode / disabled); nothing to purge.
-}
-
-// Business data cached in localStorage for the offline fallback. All of it is
-// role-scoped, so it must be wiped on logout — otherwise the next user to sign in on
-// the same browser could read the previous user's assets, invoices or user list
-// straight out of the cache before the server response arrives.
-const SENSITIVE_CACHE_KEYS = [
+// Legacy cache keys. Earlier builds mirrored all business data into localStorage;
+// the app is now database-only, so nothing is written here anymore. This scrubs any
+// keys an upgrading user still has in their browser — run once on load and again on
+// logout, so no previous user's data can be read out of a stale cache.
+const LEGACY_CACHE_KEYS = [
   'db_assets', 'db_amcs', 'db_invoices', 'db_documents', 'db_movements',
-  'db_logs', 'db_notifications', 'db_emails', 'db_users', 'db_assignments'
+  'db_logs', 'db_notifications', 'db_emails', 'db_users', 'db_assignments',
+  'db_role_permissions', 'db_assignments_cache_version'
 ];
 
 const clearCachedUserData = () => {
   try {
-    SENSITIVE_CACHE_KEYS.forEach(k => localStorage.removeItem(k));
+    LEGACY_CACHE_KEYS.forEach(k => localStorage.removeItem(k));
   } catch {
-    // localStorage unavailable; nothing to clear.
+    // localStorage unavailable (private mode / disabled); nothing to clear.
   }
 };
+
+// Purge any legacy cache the moment the module loads, before the UI renders.
+clearCachedUserData();
 
 // QR Code Sticker Renderer Component
 const QRCodeSticker = ({ asset }) => {
@@ -1841,9 +1422,9 @@ function App() {
   });
 
   // DB States (Loaded from Local Storage)
-  const [assets, setAssets] = useState(() => getStoredData('db_assets', INITIAL_ASSETS));
-  const [amcs, setAmcs] = useState(() => getStoredData('db_amcs', INITIAL_AMCS));
-  const [invoices, setInvoices] = useState(() => getStoredData('db_invoices', INITIAL_INVOICES));
+  const [assets, setAssets] = useState([]);
+  const [amcs, setAmcs] = useState([]);
+  const [invoices, setInvoices] = useState([]);
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState([]);
   const [invoiceSearchTerm, setInvoiceSearchTerm] = useState('');
   const [invoicePdfSearchTerm, setInvoicePdfSearchTerm] = useState('');
@@ -1854,25 +1435,17 @@ function App() {
   const [invoiceSortOrder, setInvoiceSortOrder] = useState('desc');
   const [invoiceCurrentPage, setInvoiceCurrentPage] = useState(1);
   const [invoiceItemsPerPage, setInvoiceItemsPerPage] = useState(10);
-  const [documents, setDocuments] = useState(() => getStoredData('db_documents', INITIAL_DOCUMENTS));
-  const [movements, setMovements] = useState(() => getStoredData('db_movements', INITIAL_MOVEMENTS));
-  const [logs, setLogs] = useState(() => getStoredData('db_logs', INITIAL_LOGS));
-  const [notifications, setNotifications] = useState(() => getStoredData('db_notifications', INITIAL_NOTIFICATIONS));
-  const [emails, setEmails] = useState(() => getStoredData('db_emails', INITIAL_EMAILS));
+  const [documents, setDocuments] = useState([]);
+  const [movements, setMovements] = useState([]);
+  const [logs, setLogs] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [emails, setEmails] = useState([]);
   const [selectedEmailId, setSelectedEmailId] = useState(() => emails[0]?.id || null);
-  const [usersList, setUsersList] = useState(() => getStoredData('db_users', DEMO_CREDENTIALS));
-  const [rolePermissions, setRolePermissions] = useState(() => {
-    // Merge cached permissions over the defaults so a permission key added in a later
-    // build (e.g. viewDocuments) is present for users whose cache predates it —
-    // otherwise the new toggle reads as undefined/false for everyone until reset.
-    const stored = getStoredData('db_role_permissions', DEFAULT_ROLE_PERMISSIONS);
-    const merged = {};
-    for (const role of Object.keys(DEFAULT_ROLE_PERMISSIONS)) {
-      merged[role] = { ...DEFAULT_ROLE_PERMISSIONS[role], ...(stored[role] || {}) };
-    }
-    return merged;
-  });
-  const [assignments, setAssignments] = useState(() => getStoredData('db_assignments', []));
+  const [usersList, setUsersList] = useState([]);
+  // The authoritative matrix is fetched from /api/role-permissions on load; these
+  // defaults (identical to the DB seed) only gate the UI during that first request.
+  const [rolePermissions, setRolePermissions] = useState(DEFAULT_ROLE_PERMISSIONS);
+  const [assignments, setAssignments] = useState([]);
 
   const [quickAllocAssetId, setQuickAllocAssetId] = useState('');
   const [quickTransferAssetId, setQuickTransferAssetId] = useState('');
@@ -2244,40 +1817,9 @@ function App() {
     }
   };
 
-  // Save States to Local Storage on Change
-  useEffect(() => {
-    localStorage.setItem('db_assets', JSON.stringify(assets));
-  }, [assets]);
-  useEffect(() => {
-    localStorage.setItem('db_amcs', JSON.stringify(amcs));
-  }, [amcs]);
-  useEffect(() => {
-    localStorage.setItem('db_invoices', JSON.stringify(invoices));
-  }, [invoices]);
-  useEffect(() => {
-    localStorage.setItem('db_documents', JSON.stringify(documents));
-  }, [documents]);
-  useEffect(() => {
-    localStorage.setItem('db_movements', JSON.stringify(movements));
-  }, [movements]);
-  useEffect(() => {
-    localStorage.setItem('db_logs', JSON.stringify(logs));
-  }, [logs]);
-  useEffect(() => {
-    localStorage.setItem('db_notifications', JSON.stringify(notifications));
-  }, [notifications]);
-  useEffect(() => {
-    localStorage.setItem('db_emails', JSON.stringify(emails));
-  }, [emails]);
-  useEffect(() => {
-    localStorage.setItem('db_users', JSON.stringify(usersList));
-  }, [usersList]);
-  useEffect(() => {
-    localStorage.setItem('db_role_permissions', JSON.stringify(rolePermissions));
-  }, [rolePermissions]);
-  useEffect(() => {
-    localStorage.setItem('db_assignments', JSON.stringify(assignments));
-  }, [assignments]);
+  // Business data is no longer mirrored to localStorage. The database is the single
+  // source of truth: state is populated from the API on load and every mutation is
+  // written through, so nothing sensitive lingers in the browser.
 
   // Apply Theme class to Body
   useEffect(() => {
@@ -2652,9 +2194,13 @@ function App() {
 
     // From here on the button shows a spinner and is disabled. The finally block
     // clears it, so it re-enables on failure and after a successful close alike.
+    if (!isApiConnected) {
+      addToast("Not Connected", "Cannot reach the server. The allocation was not saved.", "error");
+      return;
+    }
+
     setIsAllocating(true);
     try {
-    if (isApiConnected) {
       try {
         await api.createAssignment({
           assetId,
@@ -2674,38 +2220,8 @@ function App() {
         addToast("Database Error", err.message || "Failed to allocate asset in PostgreSQL.", "error");
         return;
       }
-    } else {
-      // Local Storage Mode
-      const newAssignment = {
-        id: Date.now(),
-        assetId,
-        employeeName: employee,
-        quantity: qty,
-        department: dept,
-        date,
-        notes,
-        status: 'Assigned',
-        createdAt: new Date().toISOString()
-      };
-      setAssignments(prev => [newAssignment, ...prev]);
-      setAssets(prev => prev.map(a => {
-        if (a.id === assetId) {
-          const newAssigned = (a.assignedQuantity || 0) + qty;
-          const newAvail = a.totalQuantity - newAssigned;
-          return {
-            ...a,
-            assignedQuantity: newAssigned,
-            availableQuantity: newAvail,
-            status: newAvail === 0 ? "Assigned" : "Available",
-            assignedEmployee: `${employee} (${qty})`
-          };
-        }
-        return a;
-      }));
-    }
 
     const newMvt = {
-      id: `MVT-${Date.now()}`,
       assetId,
       date,
       type: "Allocation",
@@ -2714,13 +2230,13 @@ function App() {
       actor: currentRole,
       notes: `Allocated Qty: ${qty}. ${notes || ''}`
     };
-    setMovements(prev => [newMvt, ...prev]);
-    if (isApiConnected) {
-      try {
-        await api.createMovement(newMvt);
-      } catch (err) {
-        console.error("Failed to save movement to DB:", err);
-      }
+    // Persist first, then reflect the row the database actually created (with its
+    // real SERIAL id) rather than a client-invented one.
+    try {
+      const savedMvt = await api.createMovement(newMvt);
+      setMovements(prev => [savedMvt || newMvt, ...prev]);
+    } catch (err) {
+      console.error("Failed to save movement to DB:", err);
     }
 
     await addAuditLog("Asset Allocation", `Assigned ${qty} units of ${assetId} to ${employee}`);
@@ -2896,45 +2412,26 @@ function App() {
       return;
     }
 
-    if (isApiConnected) {
-      try {
-        await api.updateAssignment(id, {
-          employeeName: newEmployee,
-          department: newDept,
-          quantity: newQty,
-          notes
-        });
-        const [updatedAssets, updatedAssignments] = await Promise.all([
-          api.getAssets(),
-          api.getAssignments()
-        ]);
-        setAssets(updatedAssets);
-        setAssignments(updatedAssignments);
-      } catch (err) {
-        addToast("Update Failed", err.message, "error");
-        return;
-      }
-    } else {
-      // Local Storage
-      setAssignments(prev => prev.map(asg => {
-        if (asg.id === id) {
-          return { ...asg, employeeName: newEmployee, department: newDept, quantity: newQty, notes };
-        }
-        return asg;
-      }));
-      setAssets(prev => prev.map(a => {
-        if (a.id === assetId) {
-          const newAssigned = (a.assignedQuantity || 0) + qtyDiff;
-          const newAvail = a.totalQuantity - newAssigned;
-          return {
-            ...a,
-            assignedQuantity: newAssigned,
-            availableQuantity: newAvail,
-            status: newAvail === 0 ? "Assigned" : "Available"
-          };
-        }
-        return a;
-      }));
+    if (!isApiConnected) {
+      addToast("Not Connected", "Cannot reach the server. The change was not saved.", "error");
+      return;
+    }
+    try {
+      await api.updateAssignment(id, {
+        employeeName: newEmployee,
+        department: newDept,
+        quantity: newQty,
+        notes
+      });
+      const [updatedAssets, updatedAssignments] = await Promise.all([
+        api.getAssets(),
+        api.getAssignments()
+      ]);
+      setAssets(updatedAssets);
+      setAssignments(updatedAssignments);
+    } catch (err) {
+      addToast("Update Failed", err.message, "error");
+      return;
     }
 
     await addAuditLog("Assignment Edit", `Updated assignment details for asset ${assetId}`);
@@ -2957,60 +2454,23 @@ function App() {
       return;
     }
 
-    if (isApiConnected) {
-      try {
-        await api.returnAssignment(id, returnQty, notes);
-        const [updatedAssets, updatedAssignments, dbMovements] = await Promise.all([
-          api.getAssets(),
-          api.getAssignments(),
-          api.getMovements()
-        ]);
-        setAssets(updatedAssets);
-        setAssignments(updatedAssignments);
-        setMovements(dbMovements);
-      } catch (err) {
-        addToast("Return Failed", err.message, "error");
-        return;
-      }
-    } else {
-      // Local Storage
-      setAssignments(prev => prev.map(asg => {
-        if (asg.id === id) {
-          const newQty = asg.quantity - returnQty;
-          return {
-            ...asg,
-            quantity: newQty,
-            status: newQty === 0 ? 'Returned' : 'Assigned'
-          };
-        }
-        return asg;
-      }));
-
-      setAssets(prev => prev.map(a => {
-        if (a.id === assetId) {
-          const newAssigned = Math.max(0, (a.assignedQuantity || 0) - returnQty);
-          const newAvail = a.totalQuantity - newAssigned;
-          return {
-            ...a,
-            assignedQuantity: newAssigned,
-            availableQuantity: newAvail,
-            status: newAvail > 0 ? "Available" : "Assigned"
-          };
-        }
-        return a;
-      }));
-
-      const newMvt = {
-        id: `MVT-${Date.now()}`,
-        assetId,
-        date: new Date().toISOString().split('T')[0],
-        type: "Return",
-        from: `${returnAssignmentModal.employeeName} (${returnAssignmentModal.department})`,
-        to: `Inventory (${location})`,
-        actor: currentRole,
-        notes: `Returned Qty: ${returnQty}. ${notes || ''}`
-      };
-      setMovements(prev => [newMvt, ...prev]);
+    if (!isApiConnected) {
+      addToast("Not Connected", "Cannot reach the server. The return was not saved.", "error");
+      return;
+    }
+    try {
+      await api.returnAssignment(id, returnQty, notes);
+      const [updatedAssets, updatedAssignments, dbMovements] = await Promise.all([
+        api.getAssets(),
+        api.getAssignments(),
+        api.getMovements()
+      ]);
+      setAssets(updatedAssets);
+      setAssignments(updatedAssignments);
+      setMovements(dbMovements);
+    } catch (err) {
+      addToast("Return Failed", err.message, "error");
+      return;
     }
 
     await addAuditLog("Asset Return", `Returned ${returnQty} units of asset ${assetId} to inventory at ${location}`);

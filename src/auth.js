@@ -78,59 +78,15 @@ export const mockAuthService = {
         throw new Error(errorData.error || "Invalid username or password.");
       }
     } catch (err) {
-      // Fallback if the server is offline or unreachable
+      // Authentication is database-only. The previous offline fallback logged users
+      // in against demo credentials and a localStorage user list — real accounts and
+      // passwords in the browser — which is exactly the mock/local-only auth this
+      // audit removes. If the server is unreachable, surface that rather than
+      // authenticating against client-side data.
       if (err.message === "Failed to fetch" || err.name === "TypeError") {
-        console.warn("API Server offline, falling back to local credentials...");
-        
-        // 1. Try demo credentials first
-        const demoUser = DEMO_CREDENTIALS.find(
-          u => u.username.toLowerCase() === username.toLowerCase() && u.password === password
-        );
-        if (demoUser) {
-          const session = {
-            username: demoUser.username,
-            role: demoUser.role,
-            name: demoUser.name,
-            email: demoUser.email
-          };
-          const storage = rememberMe ? localStorage : sessionStorage;
-          storage.setItem('user_session', JSON.stringify(session));
-          return session;
-        }
-
-        // 2. Try users from local storage db_users
-        const localUsersJson = localStorage.getItem('db_users');
-        if (localUsersJson) {
-          try {
-            const localUsers = JSON.parse(localUsersJson);
-            const user = localUsers.find(
-              u => (u.username || '').toLowerCase() === username.toLowerCase()
-            );
-
-            if (user) {
-              const expectedPassword = user.password || 'Password@123';
-              if (password === expectedPassword) {
-                const session = {
-                  username: user.username,
-                  role: user.role,
-                  name: user.name,
-                  email: user.email,
-                  passwordResetRequired: user.passwordResetRequired
-                };
-                const storage = rememberMe ? localStorage : sessionStorage;
-                storage.setItem('user_session', JSON.stringify(session));
-                return session;
-              }
-            }
-          } catch (e) {
-            console.error("Failed to parse local users:", e);
-          }
-        }
-
-        throw new Error("Invalid username or password.");
-      } else {
-        throw err;
+        throw new Error("Cannot reach the authentication server. Please try again in a moment.");
       }
+      throw err;
     }
   },
 
