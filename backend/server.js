@@ -8,6 +8,8 @@ const { randomUUID } = require('crypto');
 const db = require('./db');
 const { runMigrations } = require('./migrations');
 const storage = require('./storage');
+const notifications = require('./notifications');
+const scheduler = require('./notifications/scheduler');
 
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
@@ -769,23 +771,41 @@ app.post('/api/logs', async (req, res) => {
 
 
 // --- NOTIFICATIONS API ---
+//
+// A notification with user_id = NULL is a broadcast and is visible to everyone;
+// that is how every notification behaved before targeting existed, so older rows
+// keep showing up. A signed-in caller additionally sees the ones addressed to them.
+// Auth is optional here: the frontend loads notifications during bootstrap, and an
+// unauthenticated caller simply gets the broadcasts.
 app.get('/api/notifications', async (req, res) => {
+  const user = authenticateRequest(req).user;
   try {
-    const result = await db.query('SELECT * FROM notifications ORDER BY created_at DESC');
+    const result = user
+      ? await db.query(
+          'SELECT * FROM notifications WHERE user_id = $1 OR user_id IS NULL ORDER BY created_at DESC LIMIT 200',
+          [user.id]
+        )
+      : await db.query(
+          'SELECT * FROM notifications WHERE user_id IS NULL ORDER BY created_at DESC LIMIT 200'
+        );
     res.json(result.rows);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Database query failed' });
+    console.error('GET /api/notifications failed:', err);
+    res.status(500).json({ error: 'Database query failed: ' + err.message });
   }
 });
 
 // --- EMAILS API ---
+// This previously returned a hardcoded [], leaving the Email Alerts Inbox permanently
+// empty. Outgoing notification emails are mirrored into this table, so it now shows
+// what the system actually sent.
 app.get('/api/emails', async (req, res) => {
   try {
-    res.json([]);
+    const result = await db.query('SELECT * FROM emails ORDER BY created_at DESC LIMIT 200');
+    res.json(result.rows);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Database query failed' });
+    console.error('GET /api/emails failed:', err);
+    res.status(500).json({ error: 'Database query failed: ' + err.message });
   }
 });
 
@@ -824,12 +844,139 @@ app.patch('/api/notifications/:id', async (req, res) => {
 });
 
 app.patch('/api/notifications', async (req, res) => {
+  const user = authenticateRequest(req).user;
   try {
-    await db.query('UPDATE notifications SET read = TRUE');
+    // Scoped so one user clearing their bell does not mark another user's
+    // notifications as read. Broadcasts are shared, and clear for everyone.
+    if (user) {
+      await db.query('UPDATE notifications SET read = TRUE WHERE user_id = $1 OR user_id IS NULL', [user.id]);
+    } else {
+      await db.query('UPDATE notifications SET read = TRUE WHERE user_id IS NULL');
+    }
     res.json({ message: 'All notifications marked as read' });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Database update failed' });
+  }
+});
+
+// --- NOTIFICATION ADMINISTRATION ---
+
+const requireSuperAdmin = (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return null;
+  if (user.role !== 'Super Admin') {
+    res.status(403).json({ error: 'Only Super Admins can manage notification settings.' });
+    return null;
+  }
+  return user;
+};
+
+// Global channel switches, plus whether each channel actually has a working provider.
+app.get('/api/notification-settings', async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  try {
+    const settings = await notifications.getSettings({ fresh: true });
+    res.json({ settings, channels: notifications.channelStatus() });
+  } catch (err) {
+    console.error('GET /api/notification-settings failed:', err);
+    res.status(500).json({ error: 'Could not load notification settings: ' + err.message });
+  }
+});
+
+app.patch('/api/notification-settings', async (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+
+  const allowed = {
+    inAppEnabled: 'in_app_enabled',
+    emailEnabled: 'email_enabled',
+    smsEnabled: 'sms_enabled',
+    warrantyReminderDays: 'warranty_reminder_days',
+    amcReminderDays: 'amc_reminder_days',
+    slaWarningHours: 'sla_warning_hours'
+  };
+
+  const setClauses = [];
+  const values = [];
+  for (const [key, column] of Object.entries(allowed)) {
+    if (req.body[key] !== undefined) {
+      values.push(req.body[key]);
+      setClauses.push(`${column} = $${values.length}`);
+    }
+  }
+  if (setClauses.length === 0) {
+    return res.status(400).json({ error: 'No notification settings to update' });
+  }
+
+  try {
+    const result = await db.query(
+      `UPDATE notification_settings SET ${setClauses.join(', ')}, updated_at = NOW() WHERE id = 1 RETURNING *`,
+      values
+    );
+    notifications.invalidateSettingsCache();
+    await db.query(
+      `INSERT INTO system_logs (timestamp, actor, action, detail) VALUES ($1, $2, 'Notification Settings', $3)`,
+      [new Date().toLocaleString(), user.name || user.username, `Updated: ${setClauses.join(', ')}`]
+    );
+    res.json({ settings: result.rows[0], channels: notifications.channelStatus() });
+  } catch (err) {
+    console.error('PATCH /api/notification-settings failed:', err);
+    res.status(500).json({ error: 'Could not update notification settings: ' + err.message });
+  }
+});
+
+// Delivery audit log. Every attempt on every channel, with its status.
+app.get('/api/notification-history', async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  const { status, channel, limit } = req.query;
+  const filters = [];
+  const values = [];
+  if (status) { values.push(status); filters.push(`status = $${values.length}`); }
+  if (channel) { values.push(channel); filters.push(`channel = $${values.length}`); }
+
+  // Non-admins only see what was sent to them.
+  if (user.role !== 'Super Admin') {
+    values.push(user.id);
+    filters.push(`recipient_user_id = $${values.length}`);
+  }
+
+  values.push(Math.min(parseInt(limit, 10) || 100, 500));
+
+  try {
+    const result = await db.query(
+      `SELECT * FROM notification_deliveries
+       ${filters.length ? 'WHERE ' + filters.join(' AND ') : ''}
+       ORDER BY created_at DESC
+       LIMIT $${values.length}`,
+      values
+    );
+    const summary = await db.query(
+      `SELECT status, COUNT(*)::int AS count FROM notification_deliveries GROUP BY status`
+    );
+    res.json({
+      deliveries: result.rows,
+      summary: Object.fromEntries(summary.rows.map((r) => [r.status, r.count]))
+    });
+  } catch (err) {
+    console.error('GET /api/notification-history failed:', err);
+    res.status(500).json({ error: 'Could not load notification history: ' + err.message });
+  }
+});
+
+// Manually drain the retry queue instead of waiting for the 15-minute cron.
+app.post('/api/notifications/retry-failed', async (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  try {
+    const retried = await notifications.retryFailed();
+    res.json({ message: `Retried ${retried} failed delivery(ies)`, retried });
+  } catch (err) {
+    console.error('POST /api/notifications/retry-failed failed:', err);
+    res.status(500).json({ error: 'Retry failed: ' + err.message });
   }
 });
 
@@ -2095,19 +2242,23 @@ app.post('/api/tickets', async (req, res) => {
       }
     }
 
-    const notifId = `NTF-TKT-${ticketId}-${Date.now()}`;
-    const text = `New ${priority} Ticket ${ticketId} created in ${department}: "${subject}"`;
-    await client.query(`
-      INSERT INTO notifications (id, text, type, time, read)
-      VALUES ($1, $2, $3, 'Just now', FALSE)
-    `, [notifId, text, priority === 'Critical' ? 'error' : priority === 'Medium' ? 'warning' : 'info']);
-
     await client.query(`
       INSERT INTO system_logs (timestamp, actor, action, detail)
       VALUES ($1, $2, 'Ticket Creation', $3)
     `, [new Date().toLocaleString(), user.name || user.username, `Created Ticket ${ticketId} in ${department} department`]);
 
     await client.query('COMMIT');
+
+    // Dispatched after COMMIT: the dispatcher reads through the pool, and email/SMS
+    // must not hold a transaction open. Deliberately not awaited — a slow SMTP server
+    // should not delay the response, and a notification failure must not fail the request.
+    notifications.notify('ticket.created', `ticket-created:${ticket.id}`, {
+      ticketId, subject, description, department, priority,
+      createdBy: user.id,
+      createdByName: user.name || user.username,
+      slaDeadline
+    });
+
     res.status(201).json(mapTicket(ticket));
   } catch (err) {
     await client.query('ROLLBACK');
@@ -2214,11 +2365,18 @@ app.post('/api/tickets/:id/assign', async (req, res) => {
       VALUES ($1, $2, 'Ticket Assignment', $3)
     `, [new Date().toLocaleString(), user.name || user.username, `Assigned Ticket ${ticket.ticket_id} to ${targetName}`]);
 
-    const notifId = `NTF-ASN-${ticket.ticket_id}-${Date.now()}`;
-    await db.query(`
-      INSERT INTO notifications (id, text, type, time, read)
-      VALUES ($1, $2, 'info', 'Just now', FALSE)
-    `, [notifId, `Ticket ${ticket.ticket_id} has been assigned to ${targetName}`]);
+    // Keyed on the assignee so a reassignment notifies afresh, but assigning the
+    // same person twice does not.
+    notifications.notify('ticket.assigned', `ticket-assigned:${ticket.id}:${targetId}`, {
+      ticketId: ticket.ticket_id,
+      subject: ticket.subject,
+      department: ticket.department,
+      priority: ticket.priority,
+      slaDeadline: ticket.sla_deadline,
+      assignedTo: targetId,
+      assignedToName: targetName,
+      createdBy: ticket.created_by
+    });
 
     res.json({ message: 'Ticket assigned successfully', assignedToName: targetName });
   } catch (err) {
@@ -2276,11 +2434,26 @@ app.patch('/api/tickets/:id/status', async (req, res) => {
       VALUES ($1, $2, 'Ticket Status Update', $3)
     `, [new Date().toLocaleString(), user.name || user.username, `Updated Ticket ${ticket.ticket_id} status from ${prevStatus} to ${status}`]);
 
-    const notifId = `NTF-STS-${ticket.ticket_id}-${Date.now()}`;
-    await db.query(`
-      INSERT INTO notifications (id, text, type, time, read)
-      VALUES ($1, $2, 'info', 'Just now', FALSE)
-    `, [notifId, `Ticket ${ticket.ticket_id} status updated to ${status}`]);
+    // Resolved and Closed are distinct events with their own wording; everything
+    // else is a plain status change. The event key includes the new status so a
+    // reopened ticket can legitimately announce each transition once.
+    const eventType =
+      status === 'Resolved' ? 'ticket.resolved' :
+      status === 'Closed' ? 'ticket.closed' :
+      'ticket.status_changed';
+
+    notifications.notify(eventType, `ticket-status:${ticket.id}:${status}`, {
+      ticketId: ticket.ticket_id,
+      subject: ticket.subject,
+      department: ticket.department,
+      priority: ticket.priority,
+      status,
+      previousStatus: prevStatus,
+      actorName: user.name || user.username,
+      createdBy: ticket.created_by,
+      assignedTo: ticket.assigned_to,
+      assignedToName: ticket.assigned_to_name
+    });
 
     res.json({ message: 'Ticket status updated successfully', status });
   } catch (err) {
@@ -2431,11 +2604,16 @@ app.post('/api/tickets/:id/auto-assign', async (req, res) => {
       VALUES ($1, $2, 'Assigned', $3)
     `, [ticket.id, user.name || user.username, `Auto-assigned ticket to ${targetName} based on workload (${workloadCounts[targetId]} active tickets)`]);
 
-    const notifId = `NTF-ASN-${ticket.ticket_id}-${Date.now()}`;
-    await db.query(`
-      INSERT INTO notifications (id, text, type, time, read)
-      VALUES ($1, $2, 'info', 'Just now', FALSE)
-    `, [notifId, `Ticket ${ticket.ticket_id} has been automatically assigned to ${targetName}`]);
+    notifications.notify('ticket.assigned', `ticket-assigned:${ticket.id}:${targetId}`, {
+      ticketId: ticket.ticket_id,
+      subject: ticket.subject,
+      department: ticket.department,
+      priority: ticket.priority,
+      slaDeadline: ticket.sla_deadline,
+      assignedTo: targetId,
+      assignedToName: targetName,
+      createdBy: ticket.created_by
+    });
 
     res.json({ message: 'Ticket auto-assigned successfully', assignedToName: targetName });
   } catch (err) {
@@ -3026,79 +3204,23 @@ app.post('/api/files/signed-url', async (req, res) => {
   }
 });
 
-// --- DAILY EXPIRATIONS CRON JOB ---
-const runExpirationsCheck = async () => {
-  console.log('Running daily expiration check for warranties and AMCs...');
-  const today = new Date();
-  
-  try {
-    // 1. Check Expiring Warranties (within 90 days)
-    const assetsRes = await db.query("SELECT * FROM assets WHERE warranty_expiry IS NOT NULL AND status != 'Disposed'");
-    for (const asset of assetsRes.rows) {
-      const expiry = new Date(asset.warranty_expiry);
-      const diffTime = expiry - today;
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      
-      if (diffDays > 0 && diffDays <= 90) {
-        const notifId = `NTF-WARR-${asset.id}`;
-        const text = `Warranty expiring in ${diffDays} days for Asset ${asset.id} (${asset.name})`;
-        
-        const existsRes = await db.query('SELECT 1 FROM notifications WHERE id = $1', [notifId]);
-        if (existsRes.rows.length === 0) {
-          await db.query(
-            'INSERT INTO notifications (id, text, type, time, read) VALUES ($1, $2, $3, $4, FALSE) ON CONFLICT DO NOTHING',
-            [notifId, text, 'warning', 'Today']
-          );
-          
-          const emailId = `EML-WARR-${Date.now()}`;
-          const subject = `ALERT: Warranty Expiry Warning for Asset ${asset.id}`;
-          const body = `Dear Team,\n\nThe warranty of Asset ${asset.id} (${asset.name}, Serial: ${asset.serial_number}) will expire in ${diffDays} days on ${asset.warranty_expiry}.\n\nRegards,\nAssetFlow Monitoring Bot`;
-          await db.query(
-            'INSERT INTO emails (id, sender, date, subject, body) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING',
-            [emailId, 'Warranty Monitor', today.toLocaleString(), subject, body]
-          );
-        }
-      }
-    }
-
-    // 2. Check Expiring AMCs (within 30 days)
-    const amcsRes = await db.query("SELECT * FROM amcs");
-    for (const amc of amcsRes.rows) {
-      const expiry = new Date(amc.end_date);
-      const diffTime = expiry - today;
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      
-      if (diffDays > 0 && diffDays <= 30) {
-        const notifId = `NTF-AMC-${amc.id}`;
-        const text = `AMC Contract ${amc.id} with ${amc.vendor} expires in ${diffDays} days!`;
-        
-        const existsRes = await db.query('SELECT 1 FROM notifications WHERE id = $1', [notifId]);
-        if (existsRes.rows.length === 0) {
-          await db.query(
-            'INSERT INTO notifications (id, text, type, time, read) VALUES ($1, $2, $3, $4, FALSE) ON CONFLICT DO NOTHING',
-            [notifId, text, 'error', 'Today']
-          );
-          
-          const emailId = `EML-AMC-${Date.now()}`;
-          const subject = `ALERT: AMC Contract ${amc.id} Expiring Soon`;
-          const body = `Attention Team,\n\nAMC Contract ${amc.id} with vendor ${amc.vendor} is expiring in ${diffDays} days on ${amc.end_date}.\n\nRegards,\nAssetFlow Contract Engine`;
-          await db.query(
-            'INSERT INTO emails (id, sender, date, subject, body) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING',
-            [emailId, 'AMC Alerts Engine', today.toLocaleString(), subject, body]
-          );
-        }
-      }
-    }
-  } catch (err) {
-    console.error('Error running expiration checks:', err);
-  }
+// --- SCHEDULED NOTIFICATION JOBS ---
+//
+// Expiry reminders change once a day, so a daily sweep is enough. SLA deadlines are
+// measured in hours, so a daily job would report most breaches long after the fact —
+// that check runs hourly. Failed email/SMS deliveries are retried on their own timer.
+const runStartupChecks = async () => {
+  await scheduler.runDailyChecks();
+  await scheduler.runSlaChecks();
 };
 
-// Run expiration check once on startup
-runExpirationsCheck();
+runStartupChecks().catch((err) => console.error('Startup notification checks failed:', err));
 
-// Schedule daily check (every day at midnight)
-cron.schedule('0 0 * * *', runExpirationsCheck);
+cron.schedule('0 0 * * *', () => scheduler.runDailyChecks());   // 00:00 daily
+cron.schedule('0 * * * *', () => scheduler.runSlaChecks());     // hourly, on the hour
+cron.schedule('*/15 * * * *', () => {                            // retry failed sends
+  notifications.retryFailed().catch((err) => console.error('Notification retry failed:', err));
+});
 
 // --- 404 handler for unmatched API routes (JSON, not Express's default HTML page) ---
 app.use('/api', (req, res) => {

@@ -118,6 +118,71 @@ const runMigrations = async () => {
       );
     `);
 
+    // 7b. Notification system.
+    //
+    // notifications gains user_id: NULL keeps the old broadcast behaviour, a value
+    // targets one stakeholder. event_key identifies the thing that happened, so the
+    // same event can never be recorded twice for the same person on the same channel.
+    await db.directQuery(`
+      ALTER TABLE notifications ADD COLUMN IF NOT EXISTS user_id INT REFERENCES users(id) ON DELETE CASCADE;
+      ALTER TABLE notifications ADD COLUMN IF NOT EXISTS event_key TEXT;
+      CREATE INDEX IF NOT EXISTS notifications_user_id_idx ON notifications (user_id);
+      CREATE INDEX IF NOT EXISTS notifications_created_at_idx ON notifications (created_at DESC);
+    `);
+
+    // Delivery log: one row per (event, channel, recipient). This is both the audit
+    // trail and the deduplication key.
+    await db.directQuery(`
+      CREATE TABLE IF NOT EXISTS notification_deliveries (
+        id SERIAL PRIMARY KEY,
+        event_key TEXT NOT NULL,
+        event_type VARCHAR(60) NOT NULL,
+        channel VARCHAR(20) NOT NULL,
+        recipient_user_id INT REFERENCES users(id) ON DELETE SET NULL,
+        recipient_name VARCHAR(255),
+        recipient_address VARCHAR(255),
+        subject VARCHAR(255),
+        body TEXT,
+        status VARCHAR(20) NOT NULL DEFAULT 'Pending',
+        attempts INT NOT NULL DEFAULT 0,
+        last_error TEXT,
+        sent_at TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // COALESCE so broadcast rows (recipient_user_id IS NULL) still dedupe: NULL is
+    // never equal to NULL in a unique index, which would let duplicates through.
+    await db.directQuery(`
+      CREATE UNIQUE INDEX IF NOT EXISTS notification_deliveries_dedupe_idx
+        ON notification_deliveries (event_key, channel, COALESCE(recipient_user_id, 0));
+      CREATE INDEX IF NOT EXISTS notification_deliveries_status_idx ON notification_deliveries (status);
+      CREATE INDEX IF NOT EXISTS notification_deliveries_created_idx ON notification_deliveries (created_at DESC);
+    `);
+
+    // Global channel switches. Single row, id = 1.
+    await db.directQuery(`
+      CREATE TABLE IF NOT EXISTS notification_settings (
+        id INT PRIMARY KEY DEFAULT 1,
+        in_app_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        email_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        sms_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        warranty_reminder_days INT NOT NULL DEFAULT 60,
+        amc_reminder_days INT NOT NULL DEFAULT 60,
+        sla_warning_hours INT NOT NULL DEFAULT 4,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT notification_settings_singleton CHECK (id = 1)
+      );
+      INSERT INTO notification_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+    `);
+
+    // Escalation state, set by the SLA job when a deadline passes on an open ticket.
+    await db.directQuery(`
+      ALTER TABLE tickets ADD COLUMN IF NOT EXISTS escalated BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE tickets ADD COLUMN IF NOT EXISTS escalated_at TIMESTAMP WITH TIME ZONE;
+    `);
+
     // 8. Update seeded users to have departments and metadata
     await db.directQuery(`
       UPDATE users SET department = 'IT', designation = 'IT Administrator', status = 'Active', employee_id = 'EMP-IT01' WHERE username = 'itadmin' AND department IS NULL;

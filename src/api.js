@@ -187,6 +187,17 @@ export const api = {
   markNotificationRead: (id, read) => apiFetch(`/notifications/${id}`, { method: 'PATCH', body: JSON.stringify({ read }) }),
   markAllNotificationsRead: () => apiFetch('/notifications', { method: 'PATCH' }),
 
+  // Notification administration. `channels` reports whether each provider is actually
+  // configured, so the UI can explain why a channel is unavailable rather than just
+  // showing a toggle that does nothing.
+  getNotificationSettings: () => apiFetch('/notification-settings'),
+  updateNotificationSettings: (fields) => apiFetch('/notification-settings', { method: 'PATCH', body: JSON.stringify(fields) }),
+  getNotificationHistory: (params = {}) => {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString();
+    return apiFetch(`/notification-history${qs ? `?${qs}` : ''}`);
+  },
+  retryFailedNotifications: () => apiFetch('/notifications/retry-failed', { method: 'POST' }),
+
   // Emails
   getEmails: () => apiFetch('/emails'),
 

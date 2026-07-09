@@ -925,7 +925,6 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
         <>
           <div className="page-header" style={{ marginBottom: '4px' }}>
             <div className="page-title-section">
-              <span className="page-kicker">Zendesk Desk Service Portal</span>
               <h1 className="page-title">Service Desk Ticket Queue</h1>
               <span className="page-subtitle">Track, filter, and resolve incoming service tickets in real time.</span>
             </div>
@@ -978,7 +977,7 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
             </div>
           </div>
 
-          {/* Zendesk-style Saved Views Tabs */}
+          {/* Saved Views Tabs */}
           <div className="card" style={{ padding: '0px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)' }}>
             <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-sidebar)', overflowX: 'auto', borderTopLeftRadius: 'var(--radius-lg)', borderTopRightRadius: 'var(--radius-lg)' }}>
               {[

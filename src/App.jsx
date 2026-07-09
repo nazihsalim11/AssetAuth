@@ -5,6 +5,7 @@ import { jsPDF } from 'jspdf'
 import * as XLSX from 'xlsx'
 import { silk } from './engine/motion'
 import { openStoredFile } from './files'
+import NotificationSettingsPage from './NotificationSettingsPage'
 import {
   LayoutDashboard,
   Package,
@@ -1263,13 +1264,13 @@ const RolePermissionsPage = ({ rolePermissions, setRolePermissions }) => {
   );
 };
 
-const UserManagementPage = ({ usersList, setUsersList, isApiConnected, rolePermissions, setRolePermissions, onBulkImportClick, addToast, onUsersDeleted }) => {
+const UserManagementPage = ({ usersList, setUsersList, isApiConnected, rolePermissions, setRolePermissions, onBulkImportClick, addToast, onUsersDeleted, currentRole }) => {
   const [usersSubTab, setUsersSubTab] = useState('directory');
   return (
     <div>
       {/* Sub-tab bar */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '28px', background: 'var(--bg-sidebar)', padding: '4px', borderRadius: 'var(--radius-lg)', width: 'fit-content', border: '1px solid var(--border-color)' }}>
-        {[{ id: 'directory', label: '👥  User Directory' }, { id: 'permissions', label: '🔐  Role Permissions' }].map(tab => (
+        {[{ id: 'directory', label: '👥  User Directory' }, { id: 'permissions', label: '🔐  Role Permissions' }, { id: 'notifications', label: '🔔  Notifications' }].map(tab => (
           <button
             key={tab.id}
             onClick={() => setUsersSubTab(tab.id)}
@@ -1305,6 +1306,9 @@ const UserManagementPage = ({ usersList, setUsersList, isApiConnected, rolePermi
           rolePermissions={rolePermissions}
           setRolePermissions={setRolePermissions}
         />
+      )}
+      {usersSubTab === 'notifications' && (
+        <NotificationSettingsPage addToast={addToast} currentRole={currentRole} />
       )}
     </div>
   );
@@ -6174,6 +6178,7 @@ function App() {
               onBulkImportClick={() => setShowBulkImportEmployees(true)}
               addToast={addToast}
               onUsersDeleted={handleUsersDeleted}
+              currentRole={currentRole}
             />
           )}
 
