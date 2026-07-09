@@ -11,6 +11,7 @@ const storage = require('./storage');
 const notifications = require('./notifications');
 const scheduler = require('./notifications/scheduler');
 const knowledgeBase = require('./knowledgeBase');
+const purchaseOrders = require('./purchaseOrders');
 
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
@@ -94,13 +95,26 @@ if (!storage.isRemote) {
 }
 
 // --- ASSETS API ---
+// Employees see only the assets currently assigned to them. Scoping keys on
+// asset_assignments.user_id, not assets.assigned_employee: that column stores a
+// display summary like "Alice Johnson (1)", so matching it against a name never
+// worked. Auth is optional so the unauthenticated connection probe still succeeds.
 app.get('/api/assets', async (req, res) => {
+  const user = authenticateRequest(req).user;
   try {
-    const result = await db.query('SELECT * FROM assets ORDER BY created_at DESC');
+    const result = user && user.role === 'Employee'
+      ? await db.query(
+          `SELECT DISTINCT a.* FROM assets a
+           JOIN asset_assignments aa ON aa.asset_id = a.id
+           WHERE aa.user_id = $1 AND aa.status = 'Assigned'
+           ORDER BY a.created_at DESC`,
+          [user.id]
+        )
+      : await db.query('SELECT * FROM assets ORDER BY created_at DESC');
     res.json(result.rows);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Database query failed' });
+    console.error('GET /api/assets failed:', err);
+    res.status(500).json({ error: 'Database query failed: ' + err.message });
   }
 });
 
@@ -137,7 +151,26 @@ app.post('/api/assets', async (req, res) => {
 app.patch('/api/assets/:id', async (req, res) => {
   const { id } = req.params;
   const fields = req.body;
-  
+
+  // Relocating to a custodian must name a real, active employee. Without this an
+  // asset could be handed to a person who does not exist, which is how the orphaned
+  // custodian records arose in the first place.
+  if (fields.assignedEmployee) {
+    try {
+      const { rows } = await db.query(
+        `SELECT id FROM users
+         WHERE status = 'Active' AND (LOWER(TRIM(name)) = LOWER(TRIM($1)) OR LOWER(username) = LOWER($1))`,
+        [String(fields.assignedEmployee)]
+      );
+      if (rows.length === 0) {
+        return res.status(400).json({ error: `Employee "${fields.assignedEmployee}" does not exist in the user directory.` });
+      }
+    } catch (err) {
+      console.error('Custodian validation failed:', err);
+      return res.status(500).json({ error: 'Could not validate the selected employee: ' + err.message });
+    }
+  }
+
   // Dynamically build the UPDATE query based on fields passed
   const allowedFields = {
     name: 'name',
@@ -301,22 +334,34 @@ app.get('/api/amcs', async (req, res) => {
 });
 
 app.post('/api/amcs', async (req, res) => {
-  const { id, vendor, cost, startDate, endDate, serviceSchedule, agreementFile, serviceHistory } = req.body;
+  const { id, vendor, cost, startDate, endDate, serviceSchedule, agreementFile, serviceHistory, poNumber } = req.body;
+
+  // The PO number is the contract's business identifier, so it is required and
+  // unique. Uniqueness is enforced case-insensitively by an index; the 23505 below
+  // turns that into a readable message instead of a 500.
+  if (!poNumber || !String(poNumber).trim()) {
+    return res.status(400).json({ error: 'PO Number is required for an AMC contract.' });
+  }
+
   const query = `
-    INSERT INTO amcs (id, vendor, cost, start_date, end_date, service_schedule, agreement_file, service_history)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    INSERT INTO amcs (id, vendor, cost, start_date, end_date, service_schedule, agreement_file, service_history, po_number)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
     RETURNING *;
   `;
   const values = [
     id, vendor, cost || 0, startDate, endDate, serviceSchedule || 'Quarterly', agreementFile || '',
-    JSON.stringify(serviceHistory || [])
+    JSON.stringify(serviceHistory || []), String(poNumber).trim()
   ];
 
   try {
     const result = await db.query(query, values);
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error(err);
+    if (err.code === '23505') {
+      const field = /po_number/.test(err.message) ? `PO Number "${poNumber}"` : `AMC ID "${id}"`;
+      return res.status(409).json({ error: `${field} already exists.` });
+    }
+    console.error('POST /api/amcs failed:', err);
     res.status(500).json({ error: 'Database insertion failed: ' + err.message });
   }
 });
@@ -858,6 +903,47 @@ app.patch('/api/notifications', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Database update failed' });
+  }
+});
+
+// Deleting is scoped the same way reading is: you may remove notifications addressed
+// to you, plus broadcasts. A broadcast removed by one user disappears for everyone,
+// which matches how "mark all read" already behaves for broadcasts.
+app.delete('/api/notifications/:id', async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  try {
+    const { rowCount } = await db.query(
+      'DELETE FROM notifications WHERE id = $1 AND (user_id = $2 OR user_id IS NULL)',
+      [req.params.id, user.id]
+    );
+    if (rowCount === 0) return res.status(404).json({ error: 'Notification not found' });
+    res.json({ message: 'Notification deleted', deleted: rowCount });
+  } catch (err) {
+    console.error('DELETE /api/notifications/:id failed:', err);
+    res.status(500).json({ error: 'Could not delete notification: ' + err.message });
+  }
+});
+
+app.post('/api/notifications/bulk/delete', async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  const { notificationIds } = req.body;
+  if (!Array.isArray(notificationIds) || notificationIds.length === 0) {
+    return res.status(400).json({ error: 'Payload must contain a non-empty notificationIds array' });
+  }
+
+  try {
+    const { rowCount } = await db.query(
+      `DELETE FROM notifications
+       WHERE id = ANY($1::text[]) AND (user_id = $2 OR user_id IS NULL)`,
+      [notificationIds.map(String), user.id]
+    );
+    res.json({ message: `Deleted ${rowCount} notification(s)`, deleted: rowCount });
+  } catch (err) {
+    console.error('POST /api/notifications/bulk/delete failed:', err);
+    res.status(500).json({ error: 'Bulk delete failed: ' + err.message });
   }
 });
 
@@ -1605,21 +1691,110 @@ app.post('/api/import/assets', async (req, res) => {
 
 // --- QUANTITY BASED ASSIGNMENT APIS ---
 app.get('/api/assignments', async (req, res) => {
+  const user = authenticateRequest(req).user;
   try {
     // Inner-joining users as well as assets means a row whose employee or asset
     // has gone away can never surface in the registry, even if one were somehow
     // created outside the ON DELETE CASCADE guarantees.
+    // Employees see only their own custody records.
+    const scoped = user && user.role === 'Employee';
     const result = await db.query(`
       SELECT aa.*, a.name as asset_name, a.category as asset_category
       FROM asset_assignments aa
       JOIN assets a ON aa.asset_id = a.id
       JOIN users u ON aa.user_id = u.id
+      ${scoped ? 'WHERE aa.user_id = $1' : ''}
       ORDER BY aa.created_at DESC
-    `);
+    `, scoped ? [user.id] : []);
     res.json(result.rows);
   } catch (err) {
     console.error('GET /api/assignments failed:', err);
     res.status(500).json({ error: 'Database query failed: ' + err.message });
+  }
+});
+
+/* ---------------- Employee asset lookup ----------------
+ * Find an employee by name, employee ID, username or email, then show what they
+ * currently hold and everything they have ever held.
+ */
+
+// Search the directory. Employees may only look themselves up.
+app.get('/api/employees/search', async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  const q = (req.query.q || '').trim();
+  if (q.length < 2) return res.json([]);
+
+  try {
+    if (user.role === 'Employee') {
+      const { rows } = await db.query(
+        `SELECT id, name, username, email, employee_id, department, designation, status
+         FROM users WHERE id = $1`,
+        [user.id]
+      );
+      return res.json(rows);
+    }
+    const like = `%${q.toLowerCase()}%`;
+    const { rows } = await db.query(
+      `SELECT id, name, username, email, employee_id, department, designation, status
+       FROM users
+       WHERE status = 'Active'
+         AND (LOWER(name) LIKE $1 OR LOWER(username) LIKE $1
+              OR LOWER(email) LIKE $1 OR LOWER(COALESCE(employee_id, '')) LIKE $1)
+       ORDER BY name
+       LIMIT 25`,
+      [like]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('GET /api/employees/search failed:', err);
+    res.status(500).json({ error: 'Employee search failed: ' + err.message });
+  }
+});
+
+// Current holdings plus full assignment history for one employee.
+app.get('/api/employees/:id/assets', async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  const targetId = parseInt(req.params.id, 10);
+  if (!Number.isInteger(targetId)) return res.status(400).json({ error: 'Invalid employee id' });
+  if (user.role === 'Employee' && user.id !== targetId) {
+    return res.status(403).json({ error: 'You can only view your own assigned assets.' });
+  }
+
+  try {
+    const employee = await db.query(
+      `SELECT id, name, username, email, employee_id, department, designation, status
+       FROM users WHERE id = $1`,
+      [targetId]
+    );
+    if (employee.rows.length === 0) return res.status(404).json({ error: 'Employee not found' });
+
+    // Every custody record, current and returned. The registry's inner joins mean a
+    // row here always points at an asset and an employee that still exist.
+    const history = await db.query(
+      `SELECT aa.id, aa.asset_id, aa.quantity, aa.department, aa.date, aa.notes, aa.status,
+              aa.created_at, a.name AS asset_name, a.category AS asset_category,
+              a.serial_number, a.location, a.status AS asset_status
+       FROM asset_assignments aa
+       JOIN assets a ON aa.asset_id = a.id
+       WHERE aa.user_id = $1
+       ORDER BY aa.created_at DESC`,
+      [targetId]
+    );
+
+    const current = history.rows.filter((r) => r.status === 'Assigned');
+    res.json({
+      employee: employee.rows[0],
+      currentAssets: current,
+      history: history.rows,
+      totalQuantityHeld: current.reduce((sum, r) => sum + (r.quantity || 0), 0)
+    });
+  } catch (err) {
+    console.error('GET /api/employees/:id/assets failed:', err);
+    res.status(500).json({ error: 'Could not load employee assets: ' + err.message });
   }
 });
 
@@ -3291,6 +3466,7 @@ cron.schedule('*/15 * * * *', () => {                            // retry failed
 // --- KNOWLEDGE BASE + HELPDESK OPTIONS ---
 // Registered before the catch-all so its routes are reachable.
 knowledgeBase.register(app, { requireUser });
+purchaseOrders.register(app, { requireUser });
 
 // --- 404 handler for unmatched API routes (JSON, not Express's default HTML page) ---
 app.use('/api', (req, res) => {

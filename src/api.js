@@ -186,6 +186,25 @@ export const api = {
   createNotification: (notif) => apiFetch('/notifications', { method: 'POST', body: JSON.stringify(camelToSnake(notif)) }),
   markNotificationRead: (id, read) => apiFetch(`/notifications/${id}`, { method: 'PATCH', body: JSON.stringify({ read }) }),
   markAllNotificationsRead: () => apiFetch('/notifications', { method: 'PATCH' }),
+  deleteNotification: (id) => apiFetch(`/notifications/${id}`, { method: 'DELETE' }),
+  bulkDeleteNotifications: (notificationIds) => apiFetch('/notifications/bulk/delete', { method: 'POST', body: JSON.stringify({ notificationIds }) }),
+
+  // Employee asset lookup
+  searchEmployees: (q) => apiFetch(`/employees/search?q=${encodeURIComponent(q)}`),
+  getEmployeeAssets: (id) => apiFetch(`/employees/${id}/assets`),
+
+  // Purchase Orders
+  getPurchaseOrderOptions: () => apiFetch('/purchase-orders/options'),
+  getPurchaseOrders: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')
+    ).toString();
+    return apiFetch(`/purchase-orders${qs ? `?${qs}` : ''}`);
+  },
+  getPurchaseOrder: (id) => apiFetch(`/purchase-orders/${id}`),
+  createPurchaseOrder: (po) => apiFetch('/purchase-orders', { method: 'POST', body: JSON.stringify(po) }),
+  updatePurchaseOrder: (id, fields) => apiFetch(`/purchase-orders/${id}`, { method: 'PATCH', body: JSON.stringify(fields) }),
+  deletePurchaseOrder: (id) => apiFetch(`/purchase-orders/${id}`, { method: 'DELETE' }),
 
   // Notification administration. `channels` reports whether each provider is actually
   // configured, so the UI can explain why a channel is unavailable rather than just

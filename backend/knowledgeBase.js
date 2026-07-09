@@ -14,7 +14,7 @@
 const db = require('./db');
 
 const AUTHOR_ROLES = ['Super Admin', 'IT Admin', 'Facility Admin'];
-const TICKET_TYPES = ['Incident', 'Service Request', 'General Query'];
+const TICKET_TYPES = ['Incident', 'Service Request', 'General Query', 'Purchase Request'];
 const HELPDESK_DEPARTMENTS = ['IT', 'Administration', 'HR'];
 
 const canAuthor = (user) => AUTHOR_ROLES.includes(user.role);

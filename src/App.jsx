@@ -7,6 +7,8 @@ import { silk } from './engine/motion'
 import { openStoredFile } from './files'
 import NotificationSettingsPage from './NotificationSettingsPage'
 import KnowledgeBasePage from './KnowledgeBasePage'
+import PurchaseOrdersPage from './PurchaseOrdersPage'
+import EmployeeAssetLookup from './EmployeeAssetLookup'
 import {
   LayoutDashboard,
   Package,
@@ -91,10 +93,13 @@ const CustomSelect = ({
   style = {},
   id = '',
   name = '',
-  required = false
+  required = false,
+  searchable = false,
+  searchPlaceholder = 'Type to filter...'
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState(-1);
+  const [searchTerm, setSearchTerm] = useState('');
   const containerRef = React.useRef(null);
   const listRef = React.useRef(null);
 
@@ -107,9 +112,18 @@ const CustomSelect = ({
 
   const selectedOption = normalizedOptions.find(opt => String(opt.value) === String(value));
 
+  // With `searchable`, the rendered list is filtered but `normalizedOptions` is not,
+  // so the selected label still resolves even when it is filtered out of view.
+  const visibleOptions = searchable && searchTerm.trim()
+    ? normalizedOptions.filter(opt => String(opt.label).toLowerCase().includes(searchTerm.trim().toLowerCase()))
+    : normalizedOptions;
+
   const toggleDropdown = () => {
     if (disabled) return;
-    setIsOpen(!isOpen);
+    setIsOpen(prev => {
+      if (prev) setSearchTerm('');
+      return !prev;
+    });
   };
 
   React.useEffect(() => {
@@ -128,8 +142,8 @@ const CustomSelect = ({
       e.preventDefault();
       if (!isOpen) {
         setIsOpen(true);
-      } else if (focusedIndex >= 0 && focusedIndex < normalizedOptions.length) {
-        selectOption(normalizedOptions[focusedIndex]);
+      } else if (focusedIndex >= 0 && focusedIndex < visibleOptions.length) {
+        selectOption(visibleOptions[focusedIndex]);
       }
     } else if (e.key === 'Escape') {
       setIsOpen(false);
@@ -139,7 +153,7 @@ const CustomSelect = ({
         setIsOpen(true);
         setFocusedIndex(0);
       } else {
-        const nextIndex = (focusedIndex + 1) % normalizedOptions.length;
+        const nextIndex = visibleOptions.length ? (focusedIndex + 1) % visibleOptions.length : -1;
         setFocusedIndex(nextIndex);
         scrollIntoView(nextIndex);
       }
@@ -147,9 +161,9 @@ const CustomSelect = ({
       e.preventDefault();
       if (!isOpen) {
         setIsOpen(true);
-        setFocusedIndex(normalizedOptions.length - 1);
+        setFocusedIndex(visibleOptions.length - 1);
       } else {
-        const prevIndex = (focusedIndex - 1 + normalizedOptions.length) % normalizedOptions.length;
+        const prevIndex = visibleOptions.length ? (focusedIndex - 1 + visibleOptions.length) % visibleOptions.length : -1;
         setFocusedIndex(prevIndex);
         scrollIntoView(prevIndex);
       }
@@ -165,7 +179,8 @@ const CustomSelect = ({
 
   const scrollIntoView = (index) => {
     if (listRef.current) {
-      const activeEl = listRef.current.children[index];
+      // The search box occupies the first <li> when searchable, so option N is child N+1.
+      const activeEl = listRef.current.children[searchable ? index + 1 : index];
       if (activeEl) {
         activeEl.scrollIntoView({ block: 'nearest' });
       }
@@ -174,7 +189,7 @@ const CustomSelect = ({
 
   React.useEffect(() => {
     if (isOpen) {
-      const initialIndex = normalizedOptions.findIndex(opt => String(opt.value) === String(value));
+      const initialIndex = visibleOptions.findIndex(opt => String(opt.value) === String(value));
       setFocusedIndex(initialIndex >= 0 ? initialIndex : 0);
     } else {
       setFocusedIndex(-1);
@@ -210,12 +225,26 @@ const CustomSelect = ({
           role="listbox"
           tabIndex={-1}
         >
-          {normalizedOptions.length === 0 ? (
+          {searchable && (
+            <li style={{ padding: '4px', position: 'sticky', top: 0, background: 'var(--bg-elevated)', zIndex: 1 }}>
+              <input
+                className="form-input"
+                style={{ minHeight: '32px', fontSize: '12.5px' }}
+                placeholder={searchPlaceholder}
+                value={searchTerm}
+                autoFocus
+                onChange={(e) => { setSearchTerm(e.target.value); setFocusedIndex(-1); }}
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+              />
+            </li>
+          )}
+          {visibleOptions.length === 0 ? (
             <li className="custom-select-item is-disabled" style={{ fontStyle: 'italic', justifyContent: 'center' }}>
-              No options available
+              {searchTerm ? 'No matches' : 'No options available'}
             </li>
           ) : (
-            normalizedOptions.map((opt, index) => {
+            visibleOptions.map((opt, index) => {
               const isSelected = String(opt.value) === String(value);
               const isFocused = index === focusedIndex;
               return (
@@ -1845,9 +1874,24 @@ function App() {
   const [addAssetCategory, setAddAssetCategory] = useState('IT');
   const [addAssetInvoiceId, setAddAssetInvoiceId] = useState('');
   const [editAssetInvoiceId, setEditAssetInvoiceId] = useState('');
-  const [allocateEmployee, setAllocateEmployee] = useState('Alice Johnson');
+  const [allocateEmployee, setAllocateEmployee] = useState('');
   const [transferTargetType, setTransferTargetType] = useState('employee');
-  const [transferEmployee, setTransferEmployee] = useState('Alice Johnson');
+  const [transferEmployee, setTransferEmployee] = useState('');
+  const [transferDepartment, setTransferDepartment] = useState('');
+  const [showEmployeeLookup, setShowEmployeeLookup] = useState(false);
+  const [amcSearch, setAmcSearch] = useState('');
+  const [selectedNotificationIds, setSelectedNotificationIds] = useState([]);
+  const [isDeletingNotifications, setIsDeletingNotifications] = useState(false);
+
+  // Drop selections whose notification no longer exists, so a stale id can never be
+  // sent in a bulk delete after a refresh.
+  React.useEffect(() => {
+    setSelectedNotificationIds(prev => {
+      const live = new Set(notifications.map(n => n.id));
+      const next = prev.filter(id => live.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [notifications]);
   const [newUserRole, setNewUserRole] = useState('Employee');
 
   const [isApiConnected, setIsApiConnected] = useState(false);
@@ -1976,6 +2020,50 @@ function App() {
   const [editAssetModal, setEditAssetModal] = useState(null);
   const [allocateModal, setAllocateModal] = useState(null);
   const [transferModal, setTransferModal] = useState(null);
+
+  // Every custodian picker draws from the live user directory. The selectors used to
+  // hold a hardcoded list (Bob Smith, Charlie Brown, Diana Prince) of people who do
+  // not exist in the database, which is how assets were handed to phantom custodians.
+  const activeEmployees = React.useMemo(
+    () => (usersList || [])
+      .filter(u => u && u.name && (u.status || 'Active') === 'Active')
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    [usersList]
+  );
+
+  const employeeOptions = React.useMemo(
+    () => activeEmployees.map(u => ({
+      value: u.name,
+      label: `${u.name}${u.department ? ` (${u.department})` : ''}${u.employeeId ? ` — ${u.employeeId}` : ''}`
+    })),
+    [activeEmployees]
+  );
+
+  // PO Number is the contract's business identifier, so it is searchable alongside
+  // the contract ID and vendor.
+  const filteredAmcs = React.useMemo(() => {
+    const term = amcSearch.trim().toLowerCase();
+    if (!term) return amcs;
+    return amcs.filter(a =>
+      String(a.poNumber || '').toLowerCase().includes(term) ||
+      String(a.id || '').toLowerCase().includes(term) ||
+      String(a.vendor || '').toLowerCase().includes(term)
+    );
+  }, [amcs, amcSearch]);
+
+  const findEmployeeByName = React.useCallback(
+    (name) => activeEmployees.find(u => u.name === name) || null,
+    [activeEmployees]
+  );
+
+  // Seed the relocation form from the asset each time the modal opens, so a previous
+  // transfer's custodian/department never leaks into the next one.
+  React.useEffect(() => {
+    if (transferModal) {
+      setTransferEmployee('');
+      setTransferDepartment(transferModal.department || '');
+    }
+  }, [transferModal]);
   const [returnModal, setReturnModal] = useState(null);
   const [showBulkImportEmployees, setShowBulkImportEmployees] = useState(false);
   const [showBulkImportAssets, setShowBulkImportAssets] = useState(false);
@@ -2592,6 +2680,19 @@ function App() {
       return;
     }
 
+    // The server rejects unknown custodians too; checking here turns a 400 into a
+    // clear message before anything is written.
+    if (target === 'employee') {
+      if (!newEmployee) {
+        addToast("Employee Required", "Select the employee who will take custody of this asset.", "error");
+        return;
+      }
+      if (!findEmployeeByName(newEmployee)) {
+        addToast("Invalid Employee", `"${newEmployee}" is not an active employee in the directory.`, "error");
+        return;
+      }
+    }
+
     let prevEmployee = transferModal.assignedEmployee;
     let prevDept = transferModal.department;
     let prevLoc = transferModal.location;
@@ -2606,8 +2707,8 @@ function App() {
     if (isApiConnected) {
       try {
         await api.updateAsset(assetId, updatedFields);
-      } catch {
-        addToast("Database Error", "Failed to transfer asset in PostgreSQL.", "error");
+      } catch (err) {
+        addToast("Transfer Failed", err.message || "Failed to transfer asset.", "error");
         return;
       }
     }
@@ -2648,7 +2749,7 @@ function App() {
     addToast("Asset Transferred", `Asset ${assetId} moved successfully.`, "success");
     setTransferModal(null);
     setTransferTargetType('employee');
-    setTransferEmployee('Alice Johnson');
+    setTransferEmployee('');
   };
 
   // Handle return
@@ -3273,8 +3374,21 @@ function App() {
       agreementFile = file.name;
     }
 
+    const poNumber = String(data.get('poNumber') || '').trim();
+    if (!poNumber) {
+      addToast("PO Number Required", "An AMC contract must carry a Purchase Order number.", "error");
+      return;
+    }
+    // Uniqueness is enforced by the database; check locally too so the operator is
+    // told before the upload and insert are attempted.
+    if (amcs.some(a => (a.poNumber || '').toLowerCase() === poNumber.toLowerCase())) {
+      addToast("Duplicate PO Number", `PO Number "${poNumber}" is already used by another AMC contract.`, "error");
+      return;
+    }
+
     const newAmc = {
       id: `AMC-${String(amcs.length + 101).padStart(3, '0')}`,
+      poNumber,
       vendor: data.get('vendor'),
       cost,
       startDate: data.get('startDate'),
@@ -3288,8 +3402,8 @@ function App() {
     if (isApiConnected) {
       try {
         await api.createAmc(newAmc);
-      } catch {
-        addToast("Database Error", "Failed to save AMC contract to PostgreSQL.", "error");
+      } catch (err) {
+        addToast("Could not register AMC", err.message || "Failed to save AMC contract.", "error");
         return;
       }
     }
@@ -3711,9 +3825,14 @@ function App() {
 
   // Filter Assets selector logic
   const filteredAssets = assets.filter(asset => {
-    // Role level check: Employees only see their own assigned assets
-    if (currentRole === 'Employee' && asset.assignedEmployee !== 'Alice Johnson') {
-      return false;
+    // Employees are already scoped server-side (GET /api/assets joins asset_assignments
+    // on the caller's user_id). The old client check compared assets.assignedEmployee
+    // against a hardcoded "Alice Johnson", but that column stores a display summary
+    // like "Alice Johnson (1)", so it matched nothing and employees saw an empty list.
+    // Offline mode has no server to scope for us, so fall back to a name match there.
+    if (currentRole === 'Employee' && !isApiConnected) {
+      const me = currentUser?.name;
+      if (!me || !String(asset.assignedEmployee || '').includes(me)) return false;
     }
 
     // Find mapped invoice vendor
@@ -3749,11 +3868,11 @@ function App() {
   // Derived dashboard stats
   // Derived dashboard stats
   const totalAssetsCount = currentRole === 'Employee' 
-    ? assignments.filter(asg => asg.employeeName === (currentUser?.name || 'Alice Johnson') && asg.status === 'Assigned').reduce((acc, c) => acc + c.quantity, 0)
+    ? assignments.filter(asg => asg.employeeName === currentUser?.name && asg.status === 'Assigned').reduce((acc, c) => acc + c.quantity, 0)
     : assets.reduce((acc, a) => acc + (a.totalQuantity !== undefined ? a.totalQuantity : 1), 0);
 
   const assignedCount = currentRole === 'Employee'
-    ? assignments.filter(asg => asg.employeeName === (currentUser?.name || 'Alice Johnson') && asg.status === 'Assigned').reduce((acc, c) => acc + c.quantity, 0)
+    ? assignments.filter(asg => asg.employeeName === currentUser?.name && asg.status === 'Assigned').reduce((acc, c) => acc + c.quantity, 0)
     : assets.reduce((acc, a) => acc + (a.assignedQuantity !== undefined ? a.assignedQuantity : 0), 0);
 
   const availableCount = currentRole === 'Employee' 
@@ -3839,6 +3958,76 @@ function App() {
     }
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
     addToast("Notifications Cleared", "All notifications marked read.", "info");
+  };
+
+  /* ---------------- Notification selection & deletion ---------------- */
+
+  const toggleNotificationSelected = (id) => {
+    setSelectedNotificationIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAllNotifications = () => {
+    setSelectedNotificationIds(prev =>
+      prev.length === notifications.length ? [] : notifications.map(n => n.id)
+    );
+  };
+
+  // Re-reads from the server after a delete so the list reflects what actually
+  // happened: the API only removes notifications addressed to the caller, so a
+  // purely local filter could show rows as gone that are still there.
+  const refreshNotifications = async () => {
+    if (!isApiConnected) return null;
+    try {
+      const fresh = await api.getNotifications();
+      setNotifications(fresh || []);
+      return fresh || [];
+    } catch (err) {
+      console.warn('[AssetFlow] Could not refresh notifications:', err);
+      return null;
+    }
+  };
+
+  const handleDeleteNotification = async (notification) => {
+    if (!window.confirm('Delete this notification? This cannot be undone.')) return;
+    setIsDeletingNotifications(true);
+    try {
+      if (isApiConnected) await api.deleteNotification(notification.id);
+      if (!(await refreshNotifications())) {
+        setNotifications(prev => prev.filter(n => n.id !== notification.id));
+      }
+      setSelectedNotificationIds(prev => prev.filter(x => x !== notification.id));
+      addToast("Notification Deleted", "The notification was removed.", "success");
+    } catch (err) {
+      addToast("Delete Failed", err.message || "Could not delete the notification.", "error");
+    } finally {
+      setIsDeletingNotifications(false);
+    }
+  };
+
+  const handleBulkDeleteNotifications = async () => {
+    const count = selectedNotificationIds.length;
+    if (count === 0) return;
+    if (!window.confirm(`Delete ${count} notification${count === 1 ? '' : 's'}? This cannot be undone.`)) return;
+
+    setIsDeletingNotifications(true);
+    try {
+      let deleted = count;
+      if (isApiConnected) {
+        const res = await api.bulkDeleteNotifications(selectedNotificationIds);
+        deleted = res?.deleted ?? count;
+      }
+      if (!(await refreshNotifications())) {
+        setNotifications(prev => prev.filter(n => !selectedNotificationIds.includes(n.id)));
+      }
+      setSelectedNotificationIds([]);
+      addToast("Notifications Deleted", `${deleted} notification${deleted === 1 ? '' : 's'} removed.`, "success");
+    } catch (err) {
+      addToast("Delete Failed", err.message || "Could not delete the selected notifications.", "error");
+    } finally {
+      setIsDeletingNotifications(false);
+    }
   };
 
   const selectedEmail = emails.find(e => e.id === selectedEmailId) || emails[0];
@@ -4097,10 +4286,38 @@ function App() {
                 <div className="notif-popover">
                   <div className="notif-header">
                     <span className="notif-title">System Alerts</span>
-                    <button className="notif-clear-btn" onClick={handleClearNotifications}>
-                      Mark all read
-                    </button>
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                      {notifications.length > 0 && (
+                        <button className="notif-clear-btn" onClick={toggleSelectAllNotifications}>
+                          {selectedNotificationIds.length === notifications.length ? 'Deselect all' : 'Select all'}
+                        </button>
+                      )}
+                      <button className="notif-clear-btn" onClick={handleClearNotifications}>
+                        Mark all read
+                      </button>
+                    </div>
                   </div>
+
+                  {selectedNotificationIds.length > 0 && (
+                    <div style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      gap: '10px', padding: '8px 14px', background: 'var(--primary-soft)',
+                      borderBottom: '1px solid var(--border-color)'
+                    }}>
+                      <span style={{ fontSize: '12px', fontWeight: 600 }}>
+                        {selectedNotificationIds.length} selected
+                      </span>
+                      <button
+                        className="btn btn-danger"
+                        style={{ minHeight: '28px', padding: '4px 10px', fontSize: '11.5px' }}
+                        onClick={handleBulkDeleteNotifications}
+                        disabled={isDeletingNotifications}
+                      >
+                        <Trash2 size={12} /> Delete selected
+                      </button>
+                    </div>
+                  )}
+
                   <div className="notif-body">
                     {notifications.length === 0 ? (
                       <div style={{ padding: '16px', textAlign: 'center', fontSize: '12px', color: 'var(--text-secondary)' }}>
@@ -4109,11 +4326,28 @@ function App() {
                     ) : (
                       notifications.map(n => (
                         <div key={n.id} className={`notif-item ${!n.read ? 'unread' : ''}`}>
+                          <input
+                            type="checkbox"
+                            aria-label={`Select notification: ${n.text}`}
+                            checked={selectedNotificationIds.includes(n.id)}
+                            onChange={() => toggleNotificationSelected(n.id)}
+                            style={{ marginTop: '4px', flexShrink: 0 }}
+                          />
                           <div className={`notif-dot-active`} style={{ backgroundColor: n.type === 'error' ? 'var(--status-disposed)' : n.type === 'warning' ? 'var(--status-maintenance)' : 'var(--primary)' }}></div>
-                          <div className="notif-details">
+                          <div className="notif-details" style={{ flexGrow: 1 }}>
                             <span className="notif-text">{n.text}</span>
                             <span className="notif-time">{n.time}</span>
                           </div>
+                          <button
+                            className="btn-table-action delete"
+                            title="Delete notification"
+                            aria-label="Delete notification"
+                            onClick={() => handleDeleteNotification(n)}
+                            disabled={isDeletingNotifications}
+                            style={{ flexShrink: 0 }}
+                          >
+                            <Trash2 size={13} />
+                          </button>
                         </div>
                       ))
                     )}
@@ -4602,7 +4836,17 @@ function App() {
                   <h1 className="page-title">Fleet Allocation & Movements</h1>
                   <span className="page-subtitle">Track custodian assignments, internal branch relocations, and handovers</span>
                 </div>
+                <div className="page-actions">
+                  <button
+                    className={`btn ${showEmployeeLookup ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => setShowEmployeeLookup(v => !v)}
+                  >
+                    <Search size={15} /> Employee Asset Lookup
+                  </button>
+                </div>
               </div>
+
+              {showEmployeeLookup && <EmployeeAssetLookup addToast={addToast} />}
 
               <div className="dashboard-grid-secondary">
                 {/* Allocations Form */}
@@ -4859,6 +5103,13 @@ function App() {
                           onChange={(e) => setNewAmcServiceSchedule(e.target.value)}
                         />
                       </div>
+                      <div className="form-group full-width">
+                        <label className="form-label">PO Number *</label>
+                        <input type="text" name="poNumber" placeholder="e.g. PO-2026-014" className="form-input" required />
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                          The contract's business identifier. Must be unique across all AMCs.
+                        </span>
+                      </div>
                       <div className="form-group">
                         <label className="form-label">SLA Agreement Document</label>
                         <input type="file" name="agreementFile" className="form-input" required />
@@ -4920,7 +5171,29 @@ function App() {
 
               {/* AMC Contracts List */}
               <div style={{ marginTop: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                {amcs.map(amc => {
+                <div className="card" style={{ marginBottom: '4px' }}>
+                  <div className="search-bar-container">
+                    <Search className="search-icon" />
+                    <input
+                      className="search-bar"
+                      placeholder="Search contracts by PO number, contract ID or vendor…"
+                      value={amcSearch}
+                      onChange={(e) => setAmcSearch(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {filteredAmcs.length === 0 && (
+                  <div className="card">
+                    <div className="empty-state">
+                      <div className="empty-state-icon"><RefreshCw size={22} /></div>
+                      <div className="empty-state-title">No contracts match “{amcSearch}”</div>
+                      <div className="empty-state-desc">Try a different PO number, contract ID or vendor name.</div>
+                    </div>
+                  </div>
+                )}
+
+                {filteredAmcs.map(amc => {
                   const isExpiring = (new Date(amc.endDate) - new Date()) < (30 * 24 * 60 * 60 * 1000);
                   return (
                     <div key={amc.id} className="card" style={{ borderLeft: isExpiring ? '4px solid var(--status-disposed)' : '4px solid var(--primary)' }}>
@@ -4929,6 +5202,7 @@ function App() {
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <h3 style={{ fontSize: '18px', fontWeight: '700' }}>{amc.vendor}</h3>
                             <span className="badge" style={{ backgroundColor: 'var(--primary-glow)', color: 'var(--primary)' }}>{amc.id}</span>
+                            {amc.poNumber && <span className="badge badge-assigned">PO {amc.poNumber}</span>}
                             {isExpiring && <span className="badge badge-disposed">Expiring Soon</span>}
                           </div>
                           <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Agreement: {amc.agreementFile}</span>
@@ -5024,7 +5298,22 @@ function App() {
                 >
                   🔗 Bidirectional Asset Mapping
                 </button>
+                <button
+                  className={`tab-btn ${financeSubTab === 'purchase_orders' ? 'active' : ''}`}
+                  onClick={() => { setFinanceSubTab('purchase_orders'); setSelectedInvoiceIds([]); }}
+                >
+                  🧾 Purchase Orders
+                </button>
               </div>
+
+              {financeSubTab === 'purchase_orders' && (
+                <PurchaseOrdersPage
+                  currentRole={currentRole}
+                  invoices={invoices}
+                  amcs={amcs}
+                  addToast={addToast}
+                />
+              )}
 
               {isInitialLoading ? (
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '300px', gap: '16px', color: 'var(--primary)' }}>
@@ -6448,15 +6737,13 @@ function App() {
                   <label className="form-label">Select Employee Custodian</label>
                   <CustomSelect
                     name="employee"
-                    options={[
-                      { value: "Alice Johnson", label: "Alice Johnson (HR)" },
-                      { value: "Bob Smith", label: "Bob Smith (Engineering)" },
-                      { value: "Charlie Brown", label: "Charlie Brown (HR)" },
-                      { value: "Diana Prince", label: "Diana Prince (Finance)" }
-                    ]}
+                    options={employeeOptions}
                     value={allocateEmployee}
                     onChange={(e) => setAllocateEmployee(e.target.value)}
                     required
+                    searchable
+                    searchPlaceholder="Search by name, department or ID..."
+                    placeholder="Select an active employee..."
                     disabled={allocateModal.availableQuantity === 0}
                   />
                 </div>
@@ -6521,21 +6808,39 @@ function App() {
                     <label className="form-label">New Employee Custodian</label>
                     <CustomSelect
                       name="employee"
-                      options={[
-                        { value: "Alice Johnson", label: "Alice Johnson (HR)" },
-                        { value: "Bob Smith", label: "Bob Smith (Engineering)" },
-                        { value: "Charlie Brown", label: "Charlie Brown (HR)" },
-                        { value: "Diana Prince", label: "Diana Prince (Finance)" }
-                      ]}
+                      options={employeeOptions}
                       value={transferEmployee}
-                      onChange={(e) => setTransferEmployee(e.target.value)}
+                      onChange={(e) => {
+                        const name = e.target.value;
+                        setTransferEmployee(name);
+                        // Department follows the custodian, so the relocation lands in
+                        // the right queue without the operator retyping it.
+                        const match = findEmployeeByName(name);
+                        if (match?.department) setTransferDepartment(match.department);
+                      }}
+                      required
+                      searchable
+                      searchPlaceholder="Search by name, department or ID..."
+                      placeholder="Select an active employee..."
                     />
                   </div>
                 )}
 
                 <div className="form-group" style={{ marginTop: '12px' }}>
                   <label className="form-label">Target Department</label>
-                  <input type="text" name="department" defaultValue={transferModal.department} className="form-input" required />
+                  <input
+                    type="text"
+                    name="department"
+                    value={transferDepartment}
+                    onChange={(e) => setTransferDepartment(e.target.value)}
+                    className="form-input"
+                    required
+                  />
+                  {transferTargetType === 'employee' && findEmployeeByName(transferEmployee)?.department && (
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      Auto-filled from {transferEmployee}. You can still override it.
+                    </span>
+                  )}
                 </div>
 
                 <div className="form-group" style={{ marginTop: '12px' }}>
@@ -6549,8 +6854,8 @@ function App() {
                 </div>
 
                 <div className="form-group" style={{ marginTop: '12px' }}>
-                  <label className="form-label">Transfer Rationale</label>
-                  <textarea name="notes" placeholder="Reason for custodian shift or branch relocation..." className="form-input" required></textarea>
+                  <label className="form-label">Transfer Rationale (optional)</label>
+                  <textarea name="notes" placeholder="Reason for custodian shift or branch relocation (optional)..." className="form-input"></textarea>
                 </div>
               </div>
               <div className="modal-footer">

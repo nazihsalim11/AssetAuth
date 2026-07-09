@@ -259,6 +259,67 @@ const runMigrations = async () => {
       );
     `);
 
+    // 7e. AMC contracts get a Purchase Order number as their business identifier.
+    //     Added nullable, backfilled from the contract id, then constrained — a bare
+    //     NOT NULL would fail against existing rows.
+    await db.directQuery(`
+      ALTER TABLE amcs ADD COLUMN IF NOT EXISTS po_number VARCHAR(60);
+    `);
+    await db.directQuery(`
+      UPDATE amcs SET po_number = 'PO-' || id WHERE po_number IS NULL OR po_number = '';
+    `);
+    await db.directQuery(`
+      CREATE UNIQUE INDEX IF NOT EXISTS amcs_po_number_lower_idx ON amcs (LOWER(po_number));
+      ALTER TABLE amcs ALTER COLUMN po_number SET NOT NULL;
+    `);
+
+    // 7f. Purchase Orders. invoice_id / amc_id are nullable so the module stands on
+    //     its own today while supporting the PO -> Invoice -> Asset links later.
+    await db.directQuery(`
+      CREATE TABLE IF NOT EXISTS purchase_orders (
+        id SERIAL PRIMARY KEY,
+        po_number VARCHAR(60) NOT NULL,
+        vendor VARCHAR(255) NOT NULL,
+        issue_date DATE NOT NULL,
+        expected_delivery_date DATE,
+        status VARCHAR(30) NOT NULL DEFAULT 'Draft',
+        amount DECIMAL(14, 2) NOT NULL DEFAULT 0.00,
+        currency VARCHAR(8) NOT NULL DEFAULT 'INR',
+        notes TEXT,
+        invoice_id VARCHAR(50) REFERENCES invoices(id) ON DELETE SET NULL,
+        amc_id VARCHAR(50) REFERENCES amcs(id) ON DELETE SET NULL,
+        created_by INT REFERENCES users(id) ON DELETE SET NULL,
+        created_by_name VARCHAR(255),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS purchase_orders_po_number_lower_idx ON purchase_orders (LOWER(po_number));
+      CREATE INDEX IF NOT EXISTS purchase_orders_vendor_idx ON purchase_orders (vendor);
+      CREATE INDEX IF NOT EXISTS purchase_orders_status_idx ON purchase_orders (status);
+    `);
+
+    // Multiple attachments per PO. file_path is a storage object path, resolved to a
+    // signed URL on demand, exactly like ticket and KB attachments.
+    await db.directQuery(`
+      CREATE TABLE IF NOT EXISTS purchase_order_attachments (
+        id SERIAL PRIMARY KEY,
+        purchase_order_id INT NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+        file_name VARCHAR(255) NOT NULL,
+        file_path VARCHAR(255) NOT NULL,
+        file_type VARCHAR(100),
+        file_size VARCHAR(50),
+        uploaded_by VARCHAR(255),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS po_attachments_po_idx ON purchase_order_attachments (purchase_order_id);
+    `);
+
+    // Assets already reference invoices and AMCs; add the direct PO link so an asset
+    // can be traced back to the order that bought it.
+    await db.directQuery(`
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS purchase_order_id INT REFERENCES purchase_orders(id) ON DELETE SET NULL;
+    `);
+
     // Seed the three helpdesk categories once, so the KB is not empty on first run.
     await db.directQuery(`
       INSERT INTO kb_categories (name, description, department) VALUES

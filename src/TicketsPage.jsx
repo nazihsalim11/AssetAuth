@@ -22,7 +22,7 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
     { value: 'Administration', label: 'Administration' },
     { value: 'HR', label: 'Human Resources' }
   ];
-  const TICKET_TYPES = ['Incident', 'Service Request', 'General Query'];
+  const TICKET_TYPES = ['Incident', 'Service Request', 'General Query', 'Purchase Request'];
   const defaultDept = HELPDESK_DEPARTMENTS.some(d => d.value === currentUser?.department)
     ? currentUser.department
     : 'IT';
