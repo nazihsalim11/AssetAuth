@@ -4,6 +4,7 @@ import { Html5QrcodeScanner } from 'html5-qrcode'
 import { jsPDF } from 'jspdf'
 import * as XLSX from 'xlsx'
 import { silk } from './engine/motion'
+import { openStoredFile } from './files'
 import {
   LayoutDashboard,
   Package,
@@ -5734,7 +5735,7 @@ function App() {
                 {documents.map(doc => (
                   <div key={doc.id} className="doc-card" onClick={() => {
                     if (doc.fileUrl) {
-                      window.open(`http://localhost:5000${doc.fileUrl}`, '_blank');
+                      openStoredFile(doc.fileUrl, (msg) => addToast("Cannot open document", msg, "error"));
                       addToast("Opening Document", `Displaying file: ${doc.name}`, "info");
                     } else {
                       alert(`Initiating secure mock download for: ${doc.name}`);

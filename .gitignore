@@ -31,3 +31,12 @@ dist-ssr
 backend/.env
 backend/.env.*
 !backend/.env.example
+
+# Scratch / throwaway
+brain/
+src_app_diff.txt
+test_tickets.cjs
+
+# Locally-uploaded files. In production these live in Supabase Storage.
+# (Existing committed PDFs stay tracked; this only stops new ones.)
+backend/public/uploads/

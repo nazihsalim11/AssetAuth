@@ -10,6 +10,7 @@
     "cleanup:orphans:dry": "node cleanupOrphans.js --dry-run"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.1",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

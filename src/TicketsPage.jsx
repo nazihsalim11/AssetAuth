@@ -7,6 +7,7 @@ import {
   Layers, CheckSquare, Square, Building, ShieldCheck, Mail, Tag, HelpCircle
 } from 'lucide-react';
 import { api } from './api';
+import { openStoredFile } from './files';
 
 const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addToast }) => {
   const [tickets, setTickets] = useState([]);
@@ -1418,7 +1419,7 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
                     <h4 style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '8px', fontWeight: 700 }}>Attachments</h4>
                     <div className="attachment-preview-grid">
                       {activeTicket.attachments.map((att, idx) => (
-                        <div key={idx} className="attachment-preview-card" style={{ cursor: 'pointer' }} onClick={() => window.open(att.fileUrl, '_blank')}>
+                        <div key={idx} className="attachment-preview-card" style={{ cursor: 'pointer' }} onClick={() => openStoredFile(att.fileUrl)}>
                           <FileText className="attachment-file-icon" size={24} />
                           <span className="attachment-file-name" title={att.name}>{att.name}</span>
                         </div>

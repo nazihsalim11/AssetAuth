@@ -1,6 +1,5 @@
 import { mockAuthService } from './auth';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+import { API_BASE_URL } from './config';
 
 // Auth failures that mean the stored session is unusable. The app listens for
 // `assetflow:session-expired` and returns the user to the login screen instead of
@@ -203,17 +202,31 @@ export const api = {
   bulkUpdateUsersRole: (userIds, role) => apiFetch('/users/bulk/role', { method: 'POST', body: JSON.stringify({ userIds, role }) }),
 
   // Upload File
+  // Returns { name, fileName, fileSize, fileUrl }. Despite the name, `fileUrl` is a
+  // durable storage path, not a URL — the bucket is private. Pass it to getFileUrl()
+  // to obtain a short-lived link when the user actually opens the file.
   uploadFile: async (file) => {
     const formData = new FormData();
     formData.append('file', file);
     try {
+      const token = mockAuthService.getToken();
       const response = await fetch(`${API_BASE_URL}/upload`, {
         method: 'POST',
+        // Do NOT set Content-Type here; the browser must add the multipart boundary.
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: formData
       });
       if (!response.ok) {
         const errText = await response.text();
-        throw new Error(`HTTP ${response.status}: ${errText}`);
+        let msg = `HTTP ${response.status}`;
+        try {
+          const parsed = JSON.parse(errText);
+          msg = parsed.error || msg;
+          if (response.status === 401) handleAuthFailure(parsed.code);
+        } catch {
+          if (errText) msg = errText;
+        }
+        throw new Error(msg);
       }
       const data = await response.json();
       return snakeToCamel(data);
@@ -222,6 +235,9 @@ export const api = {
       throw err;
     }
   },
+
+  // Exchanges a stored file path for a short-lived signed URL.
+  getFileUrl: (path) => apiFetch('/files/signed-url', { method: 'POST', body: JSON.stringify({ path }) }),
 
   // Bulk Import
   //

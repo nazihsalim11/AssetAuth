@@ -3,15 +3,41 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
 const cron = require('node-cron');
 const { randomUUID } = require('crypto');
 const db = require('./db');
 const { runMigrations } = require('./migrations');
+const storage = require('./storage');
+
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
 const app = express();
-app.use(cors());
+
+// Wide-open CORS is fine for local development, but in production only the
+// deployed frontend should be able to call this API. Set ALLOWED_ORIGINS to a
+// comma-separated list, e.g. "https://assetflow.vercel.app".
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+if (allowedOrigins.length > 0) {
+  app.use(cors({
+    origin: (origin, callback) => {
+      // Same-origin and server-to-server requests carry no Origin header.
+      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+      // Reply without the CORS header rather than throwing: the browser blocks the
+      // read, and we avoid turning every stray cross-origin probe into a 500.
+      callback(null, false);
+    }
+  }));
+} else {
+  if (IS_PRODUCTION) {
+    console.warn('WARNING: ALLOWED_ORIGINS is not set — this API accepts requests from any origin.');
+  }
+  app.use(cors());
+}
+
 app.use(express.json());
 
 // Middleware to recursively map snake_case request body keys to camelCase
@@ -41,29 +67,28 @@ app.use((req, res, next) => {
   next();
 });
 
+// The development fallback below is committed to this repository, so anyone who
+// reads it could forge a token for any user. Refuse to boot without a real secret
+// once we are running for real.
+if (IS_PRODUCTION && !process.env.JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET must be set in production. Refusing to start with the public default.');
+  process.exit(1);
+}
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_assetflow_token';
 
-// Configure multer storage for real uploads
-const uploadDir = path.join(__dirname, 'public/uploads');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    const basename = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9]/g, '_');
-    cb(null, `${basename}-${Date.now()}${ext}`);
-  }
+// Files are buffered in memory, then handed to storage.js, which puts them in a
+// private Supabase bucket (or on local disk when Supabase is not configured).
+// Writing to the container's disk would not survive a redeploy.
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }
 });
 
-const upload = multer({ storage });
-
-// Serve uploaded files statically
-app.use('/uploads', express.static(uploadDir));
+// Serves files written by the local-disk fallback. In production nothing is
+// written here — objects live in the private bucket and are reached via signed URLs.
+if (!storage.isRemote) {
+  app.use('/uploads', express.static(storage.uploadDir));
+}
 
 // --- ASSETS API ---
 app.get('/api/assets', async (req, res) => {
@@ -2955,17 +2980,50 @@ app.post('/api/users/bulk/role', async (req, res) => {
 });
 
 // --- FILE UPLOAD API ---
-app.post('/api/upload', upload.single('file'), (req, res) => {
+// Uploads write into your storage bucket, so they require a signed-in user.
+// `fileUrl` is kept as the response key for compatibility, but it now carries a
+// durable storage *path* rather than a URL. Resolve it via /api/files/signed-url.
+app.post('/api/upload', upload.single('file'), async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
-  const fileUrl = `/uploads/${req.file.filename}`;
-  res.json({
-    name: req.file.originalname,
-    fileName: req.file.filename,
-    fileSize: `${(req.file.size / 1024).toFixed(1)} KB`,
-    fileUrl
-  });
+
+  try {
+    const filePath = await storage.saveFile(req.file.buffer, req.file.originalname, req.file.mimetype);
+    res.json({
+      name: req.file.originalname,
+      fileName: filePath.split('/').pop(),
+      fileSize: `${(req.file.size / 1024).toFixed(1)} KB`,
+      fileUrl: filePath
+    });
+  } catch (err) {
+    console.error('File upload failed:', err);
+    res.status(500).json({ error: err.message || 'File upload failed' });
+  }
+});
+
+// Mints a short-lived link to a stored file. Because the bucket is private, this
+// is the only way to read one — and it requires authentication.
+app.post('/api/files/signed-url', async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  const filePath = req.body?.path;
+  if (!filePath || typeof filePath !== 'string') {
+    return res.status(400).json({ error: 'A file path is required' });
+  }
+
+  try {
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const url = await storage.getSignedUrl(filePath, baseUrl);
+    res.json({ url, expiresIn: storage.SIGNED_URL_TTL_SECONDS });
+  } catch (err) {
+    console.error('Could not sign file URL:', err);
+    res.status(404).json({ error: err.message || 'File is not available' });
+  }
 });
 
 // --- DAILY EXPIRATIONS CRON JOB ---
