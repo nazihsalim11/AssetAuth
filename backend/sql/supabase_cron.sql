@@ -40,6 +40,7 @@ declare
   api_base text := 'https://REPLACE_WITH_YOUR_API_HOST';  -- no trailing slash
   secret   text;
   req_id   bigint;
+  job_url  text;
 begin
   select decrypted_secret into secret
   from vault.decrypted_secrets
@@ -49,8 +50,27 @@ begin
     raise exception 'assetflow_cron_secret is not present in vault';
   end if;
 
+  job_url := api_base || '/api/internal/cron/' || job_path;
+
+  -- A sleeping free-tier host does NOT hold the request while it boots. Render's
+  -- edge answers 404 with `x-render-routing: no-server` and starts the instance in
+  -- the background, so a single POST after an idle period is simply lost — the job
+  -- never runs, and the only trace is a 404 in net._http_response.
+  --
+  -- So: throw one request away to trigger the wake, wait for the cold start, then
+  -- send the real one. The wake request is authenticated too, so a 401 in the log
+  -- is never ambiguous. pg_sleep blocks this cron worker only.
+  perform net.http_post(
+    url := job_url,
+    headers := jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', secret),
+    body := '{}'::jsonb,
+    timeout_milliseconds := 5000
+  );
+
+  perform pg_sleep(75);
+
   select net.http_post(
-    url := api_base || '/api/internal/cron/' || job_path,
+    url := job_url,
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
       'x-cron-secret', secret
@@ -81,10 +101,16 @@ select cron.schedule('assetflow-retry-failed', '*/15 * * * *',
 --   select id, status_code, content, error_msg, created
 --     from net._http_response order by id desc limit 5;
 --
--- A 401 means CRON_SECRET on the API does not match the vault secret.
--- A 409 means that job was already running.
--- A timeout with no status_code usually means the host was asleep and did not wake
--- inside 120s; the next scheduled run will find it warm.
+-- Expect TWO rows per trigger: the throwaway wake request, then the real one.
+--   401  -> CRON_SECRET on the API does not match the vault secret.
+--   409  -> that job was already running.
+--   404 with an empty body on the FIRST row -> normal; the host was asleep and that
+--           request only served to wake it. The second row should be a 200.
+--   404 on BOTH rows -> the host did not finish booting inside 75s. Raise the
+--           pg_sleep, or keep the service warm.
+--
+-- Prefer retry-failed when testing by hand: with no failed deliveries queued it is a
+-- no-op, whereas sla-checks can actually send email and SMS.
 --
 -- Scheduled runs and their outcomes:
 --   select * from cron.job;
