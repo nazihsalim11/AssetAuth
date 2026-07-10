@@ -10,8 +10,6 @@ import { openStoredFile } from './files';
 import Markdown from './Markdown';
 import { silk } from './engine/motion';
 
-const AUTHOR_ROLES = ['Super Admin', 'IT Admin', 'Facility Admin'];
-
 /* ------------------------------------------------------------------ editor */
 
 const ArticleEditor = ({ article, categories, allArticles, onSave, onCancel, addToast }) => {
@@ -230,7 +228,7 @@ const ArticleView = ({ article, onBack, onOpenRelated, canAuthor, onEdit, onDele
 
 /* -------------------------------------------------------------------- page */
 
-const KnowledgeBasePage = ({ currentRole, addToast }) => {
+const KnowledgeBasePage = ({ canAuthor = false, addToast }) => {
   const [articles, setArticles] = useState([]);
   const [categories, setCategories] = useState([]);
   const [query, setQuery] = useState('');
@@ -240,8 +238,6 @@ const KnowledgeBasePage = ({ currentRole, addToast }) => {
   const [active, setActive] = useState(null);
   const [editing, setEditing] = useState(null); // 'new' | article object
   const [loading, setLoading] = useState(true);
-
-  const canAuthor = AUTHOR_ROLES.includes(currentRole);
 
   const load = useCallback(async (opts = {}) => {
     try {

@@ -4,6 +4,7 @@ import { X, Download, FileUp, AlertCircle, CheckCircle2, AlertTriangle, RefreshC
 import * as XLSX from 'xlsx';
 import { api } from './api';
 import Modal from './Modal';
+import { ROLE_ORDER } from './permissions';
 
 const validateAndFormatPhone = (phone) => {
   if (!phone) return { isValid: true, value: '' };
@@ -175,9 +176,8 @@ const BulkImportModal = ({ isOpen, onClose, type, onImportComplete, isApiConnect
                 }
               }
 
-              const validRoles = ['Super Admin', 'IT Admin', 'Facility Admin', 'Finance Team', 'Employee', 'Auditor'];
-              if (!validRoles.includes(emp.role)) {
-                rowErrs.push(`Invalid role: must be one of ${validRoles.join(', ')}`);
+              if (!ROLE_ORDER.includes(emp.role)) {
+                rowErrs.push(`Invalid role: must be one of ${ROLE_ORDER.join(', ')}`);
               }
 
               if (rowErrs.length > 0) {

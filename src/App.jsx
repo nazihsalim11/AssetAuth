@@ -93,7 +93,7 @@ const validateAndFormatPhone = (phone) => {
 };
 
 
-const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImportClick, addToast, onUsersDeleted, departments = [] }) => {
+const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImportClick, addToast, onUsersDeleted, departments = [], canManage = false }) => {
   const [formUsername, setFormUsername] = useState('');
   const [formPassword, setFormPassword] = useState('');
   const [formName, setFormName] = useState('');
@@ -489,14 +489,16 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
               {filteredUsers.length} registered account{filteredUsers.length !== 1 ? 's' : ''} shown
             </p>
           </div>
-          <div className="action-row" style={{ gap: '10px' }}>
-            <button className="btn btn-primary" onClick={() => { setShowRegisterModal(true); setFormError(''); setFormSuccess(''); }} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              👤 Register New User
-            </button>
-            <button className="btn btn-secondary" onClick={onBulkImportClick} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              👥 Bulk Import Employees
-            </button>
-          </div>
+          {canManage && (
+            <div className="action-row" style={{ gap: '10px' }}>
+              <button className="btn btn-primary" onClick={() => { setShowRegisterModal(true); setFormError(''); setFormSuccess(''); }} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                👤 Register New User
+              </button>
+              <button className="btn btn-secondary" onClick={onBulkImportClick} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                👥 Bulk Import Employees
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Search & Filters Toolbar */}
@@ -519,7 +521,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
               <div style={{ width: '160px' }}>
                 <CustomSelect
-                  options={['All', 'Super Admin', 'IT Admin', 'Facility Admin', 'Finance Team', 'Employee', 'Auditor'].map(r => ({ value: r, label: r === 'All' ? '🔑 Role: All' : r }))}
+                  options={[{ value: 'All', label: '🔑 Role: All' }, ...ROLE_OPTIONS]}
                   value={filterRole}
                   onChange={e => setFilterRole(e.target.value)}
                   placeholder="Role"
@@ -575,10 +577,11 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
               {selectedUserIds.length} user{selectedUserIds.length > 1 ? 's' : ''} selected
             </span>
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+              {canManage && (<>
               <button className="btn btn-secondary btn-sm" onClick={() => handleBulkStatusChange('Active')}>Activate</button>
               <button className="btn btn-secondary btn-sm" onClick={() => handleBulkStatusChange('Inactive')}>Deactivate</button>
               <button className="btn btn-secondary btn-sm" onClick={handleBulkResetPassword}>Reset Pass</button>
-              
+
               {/* Bulk Dept */}
               <div style={{ position: 'relative', display: 'inline-block' }}>
                 <button className="btn btn-secondary btn-sm" onClick={() => setShowBulkDept(!showBulkDept)}>Dept ▾</button>
@@ -608,9 +611,12 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
                   </div>
                 )}
               </div>
+              </>)}
 
               <button className="btn btn-secondary btn-sm" onClick={handleExportSelected}>Export CSV</button>
-              <button className="btn btn-secondary btn-sm" style={{ color: 'var(--status-disposed)'}} onClick={handleBulkDelete}>Delete</button>
+              {canManage && (
+                <button className="btn btn-secondary btn-sm" style={{ color: 'var(--status-disposed)'}} onClick={handleBulkDelete}>Delete</button>
+              )}
             </div>
           </div>
         )}
@@ -639,8 +645,8 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
             </thead>
             <tbody>
               {visibleUsers.map((u, idx) => (
-                <tr key={u.id || u.username || idx} style={{ cursor: 'pointer' }} onClick={(e) => {
-                  if (e.target.type !== 'checkbox' && !e.target.closest('button')) {
+                <tr key={u.id || u.username || idx} style={{ cursor: canManage ? 'pointer' : 'default' }} onClick={(e) => {
+                  if (canManage && e.target.type !== 'checkbox' && !e.target.closest('button')) {
                     handleEditUserClick(u);
                   }
                 }}>
@@ -677,14 +683,18 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
                     </span>
                   </td>
                   <td onClick={e => e.stopPropagation()}>
-                    <div style={{ display: 'flex', gap: '6px' }}>
-                      <button className="btn-table-action" onClick={() => handleEditUserClick(u)} title="Edit User">
-                        <Edit2 size={13} />
-                      </button>
-                      <button className="btn-table-action delete" onClick={() => handleDeleteUser(u)} title="Delete User">
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
+                    {canManage ? (
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button className="btn-table-action" onClick={() => handleEditUserClick(u)} title="Edit User">
+                          <Edit2 size={13} />
+                        </button>
+                        <button className="btn-table-action delete" onClick={() => handleDeleteUser(u)} title="Delete User">
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    ) : (
+                      <span style={{ color: 'var(--text-muted)' }}>—</span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -928,11 +938,20 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
 // 'Super Admin' is always full-access and cannot be edited.
 const UserManagementPage = ({ usersList, setUsersList, isApiConnected, rolePermissions, setRolePermissions, permModel, onBulkImportClick, addToast, onUsersDeleted, currentRole, departments = [] }) => {
   const [usersSubTab, setUsersSubTab] = useState('directory');
+  // The directory's create/edit/delete controls, and the role-permission editor, are
+  // each gated by their own module verb. Backend enforces these too (the real boundary).
+  const canManageUsers = canPerm(rolePermissions, currentRole, 'userManagement', 'edit')
+    || canPerm(rolePermissions, currentRole, 'userManagement', 'create')
+    || canPerm(rolePermissions, currentRole, 'userManagement', 'delete');
+  const canManagePerms = canPerm(rolePermissions, currentRole, 'userManagement', 'manage');
+  const subTabs = [{ id: 'directory', label: '👥  User Directory' }];
+  if (canManagePerms) subTabs.push({ id: 'permissions', label: '🔐  Role Permissions' });
+  const activeSubTab = usersSubTab === 'permissions' && !canManagePerms ? 'directory' : usersSubTab;
   return (
     <div>
       {/* Sub-tab bar */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '28px', background: 'var(--bg-sidebar)', padding: '4px', borderRadius: 'var(--radius-lg)', width: 'fit-content', border: '1px solid var(--border-color)' }}>
-        {[{ id: 'directory', label: '👥  User Directory' }, { id: 'permissions', label: '🔐  Role Permissions' }].map(tab => (
+        {subTabs.map(tab => (
           <button
             key={tab.id}
             onClick={() => setUsersSubTab(tab.id)}
@@ -945,15 +964,15 @@ const UserManagementPage = ({ usersList, setUsersList, isApiConnected, rolePermi
               fontWeight: 600,
               fontFamily: 'var(--font-sans)',
               transition: 'all 0.2s',
-              background: usersSubTab === tab.id ? 'var(--primary)' : 'transparent',
-              color: usersSubTab === tab.id ? 'var(--ink-contrast)' : 'var(--text-muted)',
+              background: activeSubTab === tab.id ? 'var(--primary)' : 'transparent',
+              color: activeSubTab === tab.id ? 'var(--ink-contrast)' : 'var(--text-muted)',
             }}
           >
             {tab.label}
           </button>
         ))}
       </div>
-      {usersSubTab === 'directory' && (
+      {activeSubTab === 'directory' && (
         <UserDirectoryPage
           usersList={usersList}
           setUsersList={setUsersList}
@@ -962,9 +981,10 @@ const UserManagementPage = ({ usersList, setUsersList, isApiConnected, rolePermi
           addToast={addToast}
           onUsersDeleted={onUsersDeleted}
           departments={departments}
+          canManage={canManageUsers}
         />
       )}
-      {usersSubTab === 'permissions' && (
+      {activeSubTab === 'permissions' && (
         <RolePermissionMatrix
           modules={permModel?.modules || []}
           verbLabels={permModel?.verbLabels || {}}
@@ -3728,7 +3748,7 @@ function App() {
                   <span className="stat-note">In custodians' hands</span>
                 </div>
 
-                {currentRole !== 'Employee' && (
+                {can('assets', 'view') && (
                   <div className="stat-cell">
                     <span className="stat-label">Warranties Expiring</span>
                     <span className="stat-value">{expiringWarrantiesCount}</span>
@@ -3736,7 +3756,7 @@ function App() {
                   </div>
                 )}
 
-                {currentRole !== 'Employee' && (
+                {can('finance', 'view') && (
                   <div className="stat-cell">
                     <span className="stat-label">Open Invoices</span>
                     <span className="stat-value">{pendingPaymentsCount}</span>
@@ -4653,7 +4673,7 @@ function App() {
 
               {financeSubTab === 'purchase_orders' && (
                 <PurchaseOrdersPage
-                  currentRole={currentRole}
+                  canManage={can('finance', 'create')}
                   invoices={invoices}
                   amcs={amcs}
                   addToast={addToast}
@@ -5769,14 +5789,14 @@ function App() {
               setSelectedEmailId={setSelectedEmailId}
               notifications={notifications}
               setNotifications={setNotifications}
-              currentRole={currentRole}
+              canManageNotifications={can('notificationSettings', 'manage')}
               addToast={addToast}
               isApiConnected={isApiConnected}
             />
           )}
 
           {/* ==================== USER DIRECTORY TAB ==================== */}
-          {activeTab === 'users' && currentRole === 'Super Admin' && (
+          {activeTab === 'users' && can('userDirectory', 'view') && (
             <UserManagementPage
               usersList={usersList}
               setUsersList={setUsersList}
@@ -5800,13 +5820,14 @@ function App() {
               currentUser={currentUser}
               usersList={usersList}
               addToast={addToast}
+              canManageTickets={can('tickets', 'manage')}
             />
           )}
 
           {/* ==================== KNOWLEDGE BASE TAB ==================== */}
           {activeTab === 'knowledge_base' && (
             <KnowledgeBasePage
-              currentRole={currentRole}
+              canAuthor={can('knowledge', 'create')}
               addToast={addToast}
             />
           )}

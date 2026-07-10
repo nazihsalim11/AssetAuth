@@ -19,7 +19,7 @@ import AsyncBoundary from './AsyncBoundary';
 import { STATUS } from './asyncStatus';
 import { PageSkeleton } from './Skeleton';
 
-const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addToast }) => {
+const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addToast, canManageTickets = false }) => {
   const [tickets, setTickets] = useState([]);
   const [activeTicket, setActiveTicket] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -993,7 +993,7 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
                       placeholder="Category…"
                       options={[{ value: '', label: 'Category…' }, ...distinctCategories.map(c => ({ value: c, label: c }))]} />
 
-                    {currentRole === 'Super Admin' && (
+                    {canManageTickets && (
                       <CustomSelect className="form-input-sm" style={{ width: '130px' }}
                         value={bulkDeptVal} onChange={e => setBulkDeptVal(e.target.value)} disabled={isApplyingBulk}
                         placeholder="Department…"
@@ -1251,10 +1251,10 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
                       options={distinctCategories} />
                   </div>
 
-                  {/* Department (Super Admin only) */}
+                  {/* Department queue — only roles that can manage tickets may reassign */}
                   <div className="form-group" style={{ margin: 0 }}>
                     <label className="form-label" style={{ fontSize: '11px' }}>Department Queue</label>
-                    {currentRole === 'Super Admin' ? (
+                    {canManageTickets ? (
                       <CustomSelect value={activeTicket.department}
                         onChange={e => handleUpdateDepartment(e.target.value)}
                         options={distinctDepartments.map(d => ({ value: d, label: d + ' Queue' }))} />

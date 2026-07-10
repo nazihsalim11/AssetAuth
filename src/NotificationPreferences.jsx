@@ -48,8 +48,7 @@ const prettyEvent = (eventType) =>
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ');
 
-const NotificationPreferences = ({ addToast, currentRole }) => {
-  const isSuperAdmin = currentRole === 'Super Admin';
+const NotificationPreferences = ({ addToast, canManage = false }) => {
 
   const [status, setStatus] = useState(STATUS.LOADING);
   const [error, setError] = useState(null);
@@ -199,9 +198,9 @@ const NotificationPreferences = ({ addToast, currentRole }) => {
           recipients selected uses its default audience. A global channel switch always wins.
         </p>
 
-        {!isSuperAdmin && (
+        {!canManage && (
           <p className="empty-state-desc" style={{ margin: 0 }}>
-            Only a Super Admin can change these. Shown read-only.
+            Your role can't change these. Shown read-only.
           </p>
         )}
 
@@ -232,7 +231,7 @@ const NotificationPreferences = ({ addToast, currentRole }) => {
                             <Checkbox
                               checked={Boolean(prefs[event]?.[c.key])}
                               onChange={() => toggleChannel(event, c.key)}
-                              disabled={!isSuperAdmin}
+                              disabled={!canManage}
                               aria-label={`${c.label} for ${prettyEvent(event)}`}
                             />
                           </td>
@@ -243,7 +242,7 @@ const NotificationPreferences = ({ addToast, currentRole }) => {
                             <CustomSelect
                               value={floors[event] || ''}
                               onChange={(e) => setFloor(event, e.target.value)}
-                              disabled={!isSuperAdmin}
+                              disabled={!canManage}
                               placeholder="Any"
                               options={[{ value: '', label: 'Any' }, ...PRIORITIES.map((pr) => ({ value: pr, label: `${pr} and above` }))]}
                             />
@@ -261,11 +260,11 @@ const NotificationPreferences = ({ addToast, currentRole }) => {
                                   key={role}
                                   type="button"
                                   className={`badge ${on ? 'badge-active' : ''}`}
-                                  onClick={() => isSuperAdmin && toggleRole(event, role)}
-                                  disabled={!isSuperAdmin}
+                                  onClick={() => canManage && toggleRole(event, role)}
+                                  disabled={!canManage}
                                   aria-pressed={on}
                                   style={{
-                                    cursor: isSuperAdmin ? 'pointer' : 'default',
+                                    cursor: canManage ? 'pointer' : 'default',
                                     background: on ? 'var(--primary-soft)' : 'transparent',
                                     color: on ? 'var(--primary)' : 'var(--text-muted)',
                                     borderColor: on ? 'var(--primary)' : 'var(--border-color)'
@@ -282,23 +281,23 @@ const NotificationPreferences = ({ addToast, currentRole }) => {
                                   key={`u-${uid}`}
                                   type="button"
                                   className="badge"
-                                  onClick={() => isSuperAdmin && removeUser(event, uid)}
-                                  disabled={!isSuperAdmin}
-                                  title={isSuperAdmin ? 'Remove this person' : undefined}
+                                  onClick={() => canManage && removeUser(event, uid)}
+                                  disabled={!canManage}
+                                  title={canManage ? 'Remove this person' : undefined}
                                   style={{
-                                    cursor: isSuperAdmin ? 'pointer' : 'default',
+                                    cursor: canManage ? 'pointer' : 'default',
                                     background: 'var(--status-available-bg)',
                                     color: 'var(--status-available)',
                                     borderColor: 'var(--status-available)'
                                   }}
                                 >
                                   {u ? (u.name || u.username) : `User #${uid}`}
-                                  {isSuperAdmin && <X size={11} style={{ marginLeft: 4 }} />}
+                                  {canManage && <X size={11} style={{ marginLeft: 4 }} />}
                                 </button>
                               );
                             })}
 
-                            {isSuperAdmin && (
+                            {canManage && (
                               <CustomSelect
                                 value=""
                                 onChange={(e) => addUser(event, e.target.value)}
@@ -325,7 +324,7 @@ const NotificationPreferences = ({ addToast, currentRole }) => {
           );
         })}
 
-        {isSuperAdmin && (
+        {canManage && (
           <div className="action-row" style={{ marginTop: 'var(--sp-4)' }}>
             <button className="btn btn-primary" onClick={save} disabled={!dirty || saving} aria-busy={saving}>
               <Save size={15} />

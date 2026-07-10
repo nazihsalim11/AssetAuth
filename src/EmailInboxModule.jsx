@@ -22,7 +22,7 @@ const dotColor = (type) =>
 const EmailInboxModule = ({
   emails, setEmails, selectedEmailId, setSelectedEmailId,
   notifications, setNotifications,
-  currentRole, addToast, isApiConnected
+  canManageNotifications = false, addToast, isApiConnected
 }) => {
   const [section, setSection] = useState('inbox');
   const [selectedEmails, setSelectedEmails] = useState([]);
@@ -309,7 +309,7 @@ const EmailInboxModule = ({
 
       {/* ---------------- Settings ---------------- */}
       {section === 'settings' && (
-        <NotificationSettingsPage addToast={addToast} currentRole={currentRole} />
+        <NotificationSettingsPage addToast={addToast} canManage={canManageNotifications} />
       )}
     </>
   );

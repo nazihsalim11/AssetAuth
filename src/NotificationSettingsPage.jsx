@@ -28,7 +28,7 @@ const CHANNEL_META = {
   sms: { key: 'smsEnabled', column: 'sms_enabled', label: 'SMS', Icon: MessageSquare }
 };
 
-const NotificationSettingsPage = ({ addToast, currentRole }) => {
+const NotificationSettingsPage = ({ addToast, canManage = false }) => {
   const [settings, setSettings] = useState(null);
   const [channels, setChannels] = useState(null);
   const [history, setHistory] = useState([]);
@@ -36,8 +36,6 @@ const NotificationSettingsPage = ({ addToast, currentRole }) => {
   const [statusFilter, setStatusFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-
-  const isSuperAdmin = currentRole === 'Super Admin';
 
   const loadHistory = useCallback(async (status) => {
     try {
@@ -70,7 +68,7 @@ const NotificationSettingsPage = ({ addToast, currentRole }) => {
   }, [addToast, loadHistory]);
 
   const toggleChannel = async (channelName) => {
-    if (!isSuperAdmin || !settings) return;
+    if (!canManage || !settings) return;
     const meta = CHANNEL_META[channelName];
     const next = !settings[meta.column];
     setSaving(true);
@@ -87,7 +85,7 @@ const NotificationSettingsPage = ({ addToast, currentRole }) => {
   };
 
   const updateNumber = async (key, value) => {
-    if (!isSuperAdmin) return;
+    if (!canManage) return;
     const parsed = parseInt(value, 10);
     if (Number.isNaN(parsed) || parsed < 1) return;
     setSaving(true);
@@ -159,11 +157,11 @@ const NotificationSettingsPage = ({ addToast, currentRole }) => {
                     <Icon size={16} style={{ color: enabled ? 'var(--primary)' : 'var(--text-muted)' }} />
                     {meta.label}
                   </div>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: isSuperAdmin ? 'pointer' : 'not-allowed' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: canManage ? 'pointer' : 'not-allowed' }}>
                     <input
                       type="checkbox"
                       checked={!!enabled}
-                      disabled={!isSuperAdmin || saving}
+                      disabled={!canManage || saving}
                       onChange={() => toggleChannel(name)}
                       aria-label={`Toggle ${meta.label} notifications`}
                     />
@@ -177,14 +175,14 @@ const NotificationSettingsPage = ({ addToast, currentRole }) => {
           })}
         </div>
 
-        {!isSuperAdmin && (
+        {!canManage && (
           <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            Only Super Admins can change these settings.
+            Your role can't change these settings.
           </p>
         )}
       </div>
 
-      <NotificationPreferences addToast={addToast} currentRole={currentRole} />
+      <NotificationPreferences addToast={addToast} canManage={canManage} />
 
       {/* Schedules */}
       <div className="card">
@@ -197,7 +195,7 @@ const NotificationSettingsPage = ({ addToast, currentRole }) => {
               type="number"
               min="1"
               defaultValue={settings?.warranty_reminder_days}
-              disabled={!isSuperAdmin || saving}
+              disabled={!canManage || saving}
               onBlur={(e) => updateNumber('warrantyReminderDays', e.target.value)}
             />
           </div>
@@ -208,7 +206,7 @@ const NotificationSettingsPage = ({ addToast, currentRole }) => {
               type="number"
               min="1"
               defaultValue={settings?.amc_reminder_days}
-              disabled={!isSuperAdmin || saving}
+              disabled={!canManage || saving}
               onBlur={(e) => updateNumber('amcReminderDays', e.target.value)}
             />
           </div>
@@ -219,7 +217,7 @@ const NotificationSettingsPage = ({ addToast, currentRole }) => {
               type="number"
               min="1"
               defaultValue={settings?.sla_warning_hours}
-              disabled={!isSuperAdmin || saving}
+              disabled={!canManage || saving}
               onBlur={(e) => updateNumber('slaWarningHours', e.target.value)}
             />
           </div>
@@ -234,7 +232,7 @@ const NotificationSettingsPage = ({ addToast, currentRole }) => {
       <div className="card">
         <div className="card-title-section">
           <span className="card-title"><CheckCircle2 /> Delivery History</span>
-          {isSuperAdmin && (
+          {canManage && (
             <button className="btn btn-secondary" onClick={retry} disabled={saving}>
               <RefreshCw size={14} className={saving ? 'animate-spin' : ''} />
               Retry failed

@@ -8,8 +8,6 @@ import { api } from './api';
 import { openStoredFile } from './files';
 import Modal from './Modal';
 
-const MANAGE_ROLES = ['Super Admin', 'Finance Team'];
-
 const STATUS_BADGE = {
   Draft: 'badge',
   Issued: 'badge badge-assigned',
@@ -167,7 +165,7 @@ const PoEditor = ({ po, options, invoices, amcs, onSave, onCancel, addToast }) =
 
 /* -------------------------------------------------------------------- page */
 
-const PurchaseOrdersPage = ({ currentRole, invoices = [], amcs = [], addToast }) => {
+const PurchaseOrdersPage = ({ canManage = false, invoices = [], amcs = [], addToast }) => {
   const [orders, setOrders] = useState([]);
   const [options, setOptions] = useState({ statuses: [], currencies: [] });
   const [query, setQuery] = useState('');
@@ -177,8 +175,6 @@ const PurchaseOrdersPage = ({ currentRole, invoices = [], amcs = [], addToast })
   const [editing, setEditing] = useState(null); // 'new' | po
   const [viewing, setViewing] = useState(null);
   const [loading, setLoading] = useState(true);
-
-  const canManage = MANAGE_ROLES.includes(currentRole);
 
   const load = useCallback(async () => {
     try {
