@@ -129,7 +129,7 @@ app.get('/api/assets', async (req, res) => {
 });
 
 app.post('/api/assets', async (req, res) => {
-  const actingUser = requireAssetManager(req, res);
+  const actingUser = await requirePermission(req, res, 'assets', 'create');
   if (!actingUser) return;
 
   const {
@@ -162,7 +162,7 @@ app.post('/api/assets', async (req, res) => {
 });
 
 app.patch('/api/assets/:id', async (req, res) => {
-  const actingUser = requireAssetManager(req, res);
+  const actingUser = await requirePermission(req, res, 'assets', 'edit');
   if (!actingUser) return;
 
   const { id } = req.params;
@@ -244,7 +244,7 @@ app.patch('/api/assets/:id', async (req, res) => {
 });
 
 app.delete('/api/assets/:id', async (req, res) => {
-  const actingUser = requireAssetManager(req, res);
+  const actingUser = await requirePermission(req, res, 'assets', 'delete');
   if (!actingUser) return;
 
   const { id } = req.params;
@@ -260,7 +260,7 @@ app.delete('/api/assets/:id', async (req, res) => {
 
 
 app.post('/api/assets/bulk/delete', async (req, res) => {
-  const actingUser = requireAssetManager(req, res);
+  const actingUser = await requirePermission(req, res, 'assets', 'delete');
   if (!actingUser) return;
 
   const { assetIds } = req.body;
@@ -283,7 +283,7 @@ app.post('/api/assets/bulk/delete', async (req, res) => {
 });
 
 app.post('/api/assets/bulk/status', async (req, res) => {
-  const actingUser = requireAssetManager(req, res);
+  const actingUser = await requirePermission(req, res, 'assets', 'edit');
   if (!actingUser) return;
 
   const { assetIds, status } = req.body;
@@ -306,7 +306,7 @@ app.post('/api/assets/bulk/status', async (req, res) => {
 });
 
 app.post('/api/assets/bulk/category', async (req, res) => {
-  const actingUser = requireAssetManager(req, res);
+  const actingUser = await requirePermission(req, res, 'assets', 'edit');
   if (!actingUser) return;
 
   const { assetIds, category } = req.body;
@@ -323,7 +323,7 @@ app.post('/api/assets/bulk/category', async (req, res) => {
 });
 
 app.post('/api/assets/bulk/location', async (req, res) => {
-  const actingUser = requireAssetManager(req, res);
+  const actingUser = await requirePermission(req, res, 'assets', 'edit');
   if (!actingUser) return;
 
   const { assetIds, location } = req.body;
@@ -340,7 +340,7 @@ app.post('/api/assets/bulk/location', async (req, res) => {
 });
 
 app.post('/api/assets/bulk/department', async (req, res) => {
-  const actingUser = requireAssetManager(req, res);
+  const actingUser = await requirePermission(req, res, 'assets', 'edit');
   if (!actingUser) return;
 
   const { assetIds, department } = req.body;
@@ -368,6 +368,8 @@ app.get('/api/amcs', async (req, res) => {
 });
 
 app.post('/api/amcs', async (req, res) => {
+  const actingUser = await requirePermission(req, res, 'amc', 'create');
+  if (!actingUser) return;
   const { id, vendor, cost, startDate, endDate, serviceSchedule, agreementFile, serviceHistory, poNumber } = req.body;
 
   // The PO number is the contract's business identifier, so it is required and
@@ -436,6 +438,8 @@ const actorOf = (req) => {
 };
 
 app.post('/api/invoices', async (req, res) => {
+  const actingUser = await requirePermission(req, res, 'finance', 'create');
+  if (!actingUser) return;
   const { id, poReference, vendor, amount, gst, date, paymentStatus, fileName } = req.body;
   const query = `
     INSERT INTO invoices (id, po_reference, vendor, amount, gst, date, payment_status, file_name)
@@ -464,6 +468,8 @@ app.post('/api/invoices', async (req, res) => {
 });
 
 app.patch('/api/invoices/:id', async (req, res) => {
+  const gateUser = await requirePermission(req, res, 'finance', 'edit');
+  if (!gateUser) return;
   const { id } = req.params;
   const { paymentStatus, fileName } = req.body;
   const setClauses = [];
@@ -811,7 +817,7 @@ app.get('/api/movements', async (req, res) => {
 });
 
 app.post('/api/movements', async (req, res) => {
-  const actingUser = requireAssetManager(req, res);
+  const actingUser = await requirePermission(req, res, 'allocations', 'create');
   if (!actingUser) return;
 
   const { assetId, date, type, from, to, actor, notes } = req.body;
@@ -1144,8 +1150,8 @@ app.get('/api/role-permissions', async (req, res) => {
 app.patch('/api/role-permissions', async (req, res) => {
   const user = requireUser(req, res);
   if (!user) return;
-  if (user.role !== 'Super Admin') {
-    return res.status(403).json({ error: 'Only Super Admins can change role permissions.' });
+  if (!(await roleCan(user, 'userManagement', 'manage'))) {
+    return res.status(403).json({ error: 'Your role is not permitted to change role permissions.' });
   }
   // The editor sends the complete { role: { module: { verb: bool } } } matrix, so
   // each role is replaced wholesale after sanitising. A shallow JSONB `||` merge would
@@ -1196,16 +1202,6 @@ app.patch('/api/role-permissions', async (req, res) => {
 
 // --- NOTIFICATION ADMINISTRATION ---
 
-const requireSuperAdmin = (req, res) => {
-  const user = requireUser(req, res);
-  if (!user) return null;
-  if (user.role !== 'Super Admin') {
-    res.status(403).json({ error: 'Only Super Admins can manage notification settings.' });
-    return null;
-  }
-  return user;
-};
-
 // Global channel switches, plus whether each channel actually has a working provider.
 app.get('/api/notification-settings', async (req, res) => {
   const user = requireUser(req, res);
@@ -1220,7 +1216,7 @@ app.get('/api/notification-settings', async (req, res) => {
 });
 
 app.patch('/api/notification-settings', async (req, res) => {
-  const user = requireSuperAdmin(req, res);
+  const user = await requirePermission(req, res, 'notificationSettings', 'manage');
   if (!user) return;
 
   const allowed = {
@@ -1291,7 +1287,7 @@ app.get('/api/notification-preferences', async (req, res) => {
 // leave some events routed to nobody, which is silent and therefore worse than a
 // failed request.
 app.put('/api/notification-preferences', async (req, res) => {
-  const user = requireSuperAdmin(req, res);
+  const user = await requirePermission(req, res, 'notificationSettings', 'manage');
   if (!user) return;
 
   const { preferences = [], recipients = [] } = req.body || {};
@@ -1394,7 +1390,7 @@ app.get('/api/notification-history', async (req, res) => {
 
 // Manually drain the retry queue instead of waiting for the 15-minute cron.
 app.post('/api/notifications/retry-failed', async (req, res) => {
-  const user = requireSuperAdmin(req, res);
+  const user = await requirePermission(req, res, 'notificationSettings', 'manage');
   if (!user) return;
   try {
     const retried = await notifications.retryFailed();
@@ -1453,6 +1449,55 @@ const requireUser = (req, res) => {
   return user;
 };
 
+// The JWT carries the role from login time. If an admin changes a user's role, the
+// token still says the old one until the user re-logs in — which the brief forbids.
+// So resolve the *current* role from the database at the permission boundary, cached
+// briefly to keep it off the hot path. invalidateUserRole() clears it on a role edit.
+const userRoleCache = new Map(); // id -> { role, at }
+const USER_ROLE_TTL_MS = 15_000;
+
+async function currentRoleOf(user) {
+  if (!user || user.id == null) return user && user.role;
+  const cached = userRoleCache.get(user.id);
+  if (cached && Date.now() - cached.at < USER_ROLE_TTL_MS) return cached.role;
+  try {
+    const { rows } = await db.query('SELECT role FROM users WHERE id = $1', [user.id]);
+    const role = rows[0] ? rows[0].role : user.role;
+    userRoleCache.set(user.id, { role, at: Date.now() });
+    return role;
+  } catch {
+    return user.role; // never fail a request because the role lookup hiccuped
+  }
+}
+
+function invalidateUserRole(id) {
+  if (id != null) userRoleCache.delete(id);
+}
+
+/**
+ * The single backend permission gate. Authenticates, resolves the caller's current
+ * role, and checks it against the module -> verb matrix. Returns the user (with the
+ * fresh role attached) or null after sending 403. Replaces the hardcoded role-string
+ * checks scattered across the endpoints.
+ */
+async function requirePermission(req, res, moduleKey, verb) {
+  const user = requireUser(req, res);
+  if (!user) return null;
+  const role = await currentRoleOf(user);
+  if (await roleAllows(role, moduleKey, verb)) {
+    return { ...user, role };
+  }
+  res.status(403).json({ error: `Your role is not permitted to ${verb} this resource.` });
+  return null;
+}
+
+// Boolean form, for routes that have already authenticated and only need to gate one
+// action inline. Resolves the caller's current role, then checks the matrix.
+async function roleCan(user, moduleKey, verb) {
+  if (!user) return false;
+  return roleAllows(await currentRoleOf(user), moduleKey, verb);
+}
+
 /**
  * Like requireUser, but guarantees `department` is populated. Tokens issued before
  * department was added to the JWT payload do not carry it, and the ticket queue
@@ -1477,16 +1522,6 @@ const EMPLOYEE_ASSET_IDS = `
 `;
 
 /** Rejects the request unless the caller may write to asset records. */
-const requireAssetManager = (req, res) => {
-  const user = requireUser(req, res);
-  if (!user) return null;
-  if (isEmployee(user)) {
-    res.status(403).json({ error: 'Employees cannot create, modify or delete asset records.' });
-    return null;
-  }
-  return user;
-};
-
 const requireUserWithDepartment = async (req, res) => {
   const user = requireUser(req, res);
   if (!user) return null;
@@ -2185,7 +2220,7 @@ app.get('/api/employees/:id/assets', async (req, res) => {
 });
 
 app.post('/api/assignments', async (req, res) => {
-  const actingUser = requireAssetManager(req, res);
+  const actingUser = await requirePermission(req, res, 'allocations', 'create');
   if (!actingUser) return;
 
   const { assetId, employeeName, quantity, department, notes, date } = req.body;
@@ -2273,7 +2308,7 @@ app.post('/api/assignments', async (req, res) => {
 });
 
 app.post('/api/assignments/:id/return', async (req, res) => {
-  const actingUser = requireAssetManager(req, res);
+  const actingUser = await requirePermission(req, res, 'allocations', 'edit');
   if (!actingUser) return;
 
   const { id } = req.params;
@@ -2355,7 +2390,7 @@ app.post('/api/assignments/:id/return', async (req, res) => {
 });
 
 app.patch('/api/assignments/:id', async (req, res) => {
-  const actingUser = requireAssetManager(req, res);
+  const actingUser = await requirePermission(req, res, 'allocations', 'edit');
   if (!actingUser) return;
 
   const { id } = req.params;
@@ -2542,7 +2577,7 @@ app.post('/api/tickets/bulk/status', async (req, res) => {
   const { ticketIds, status } = req.body;
   const user = requireUser(req, res);
   if (!user) return;
-  if (user.role === 'Employee') return res.status(403).json({ error: 'Employees cannot bulk update.' });
+  if (!(await roleCan(user, 'tickets', 'edit'))) return res.status(403).json({ error: 'Your role is not permitted to bulk-edit tickets.' });
 
   const validStatuses = ['Open', 'In Progress', 'Pending', 'On Hold', 'Resolved', 'Closed', 'Reopened', 'Waiting for Employee'];
   if (!validStatuses.includes(status)) return res.status(400).json({ error: 'Invalid status.' });
@@ -2583,7 +2618,7 @@ app.post('/api/tickets/bulk/priority', async (req, res) => {
   const { ticketIds, priority } = req.body;
   const user = requireUser(req, res);
   if (!user) return;
-  if (user.role === 'Employee') return res.status(403).json({ error: 'Employees cannot bulk update.' });
+  if (!(await roleCan(user, 'tickets', 'edit'))) return res.status(403).json({ error: 'Your role is not permitted to bulk-edit tickets.' });
 
   const client = await db.pool.connect();
   try {
@@ -2615,7 +2650,7 @@ app.post('/api/tickets/bulk/category', async (req, res) => {
   const { ticketIds, category } = req.body;
   const user = requireUser(req, res);
   if (!user) return;
-  if (user.role === 'Employee') return res.status(403).json({ error: 'Employees cannot bulk update.' });
+  if (!(await roleCan(user, 'tickets', 'edit'))) return res.status(403).json({ error: 'Your role is not permitted to bulk-edit tickets.' });
 
   const client = await db.pool.connect();
   try {
@@ -2647,7 +2682,7 @@ app.post('/api/tickets/bulk/department', async (req, res) => {
   const { ticketIds, department } = req.body;
   const user = requireUser(req, res);
   if (!user) return;
-  if (user.role !== 'Super Admin') return res.status(403).json({ error: 'Only Super Admins can reassign departments.' });
+  if (!(await roleCan(user, 'tickets', 'manage'))) return res.status(403).json({ error: 'Your role is not permitted to reassign ticket departments.' });
 
   const client = await db.pool.connect();
   try {
@@ -2680,7 +2715,7 @@ app.post('/api/tickets/bulk/assign', async (req, res) => {
   const assignToUserId = req.body.assignToUserId || req.body.assign_to_user_id;
   const user = requireUser(req, res);
   if (!user) return;
-  if (user.role === 'Employee') return res.status(403).json({ error: 'Employees cannot bulk assign.' });
+  if (!(await roleCan(user, 'tickets', 'edit'))) return res.status(403).json({ error: 'Your role is not permitted to assign tickets.' });
 
   const client = await db.pool.connect();
   try {
@@ -2723,7 +2758,7 @@ app.post('/api/tickets/bulk/delete', async (req, res) => {
   const { ticketIds } = req.body;
   const user = requireUser(req, res);
   if (!user) return;
-  if (user.role === 'Employee') return res.status(403).json({ error: 'Employees cannot bulk delete.' });
+  if (!(await roleCan(user, 'tickets', 'delete'))) return res.status(403).json({ error: 'Your role is not permitted to delete tickets.' });
 
   const client = await db.pool.connect();
   try {
@@ -2897,8 +2932,8 @@ app.post('/api/tickets/:id/comments', async (req, res) => {
   }
 
   const isInt = !!isInternal;
-  if (isInt && user.role === 'Employee') {
-    return res.status(403).json({ error: 'Employees cannot post internal comments.' });
+  if (isInt && !(await roleCan(user, 'tickets', 'edit'))) {
+    return res.status(403).json({ error: 'Your role is not permitted to post internal comments.' });
   }
 
   try {
@@ -2939,8 +2974,8 @@ app.post('/api/tickets/:id/assign', async (req, res) => {
   const user = requireUser(req, res);
   if (!user) return;
 
-  if (user.role === 'Employee') {
-    return res.status(403).json({ error: 'Employees cannot assign tickets.' });
+  if (!(await roleCan(user, 'tickets', 'edit'))) {
+    return res.status(403).json({ error: 'Your role is not permitted to assign tickets.' });
   }
 
   try {
@@ -3092,7 +3127,7 @@ app.patch('/api/tickets/:id/priority', async (req, res) => {
   const { priority } = req.body;
   const user = requireUser(req, res);
   if (!user) return;
-  if (user.role === 'Employee') return res.status(403).json({ error: 'Employees cannot change priority.' });
+  if (!(await roleCan(user, 'tickets', 'edit'))) return res.status(403).json({ error: 'Your role is not permitted to change ticket priority.' });
 
   const validPriorities = ['Critical', 'Medium', 'Low'];
   if (!validPriorities.includes(priority)) return res.status(400).json({ error: 'Invalid priority.' });
@@ -3134,7 +3169,7 @@ app.patch('/api/tickets/:id/category', async (req, res) => {
   const { category } = req.body;
   const user = requireUser(req, res);
   if (!user) return;
-  if (user.role === 'Employee') return res.status(403).json({ error: 'Employees cannot change category.' });
+  if (!(await roleCan(user, 'tickets', 'edit'))) return res.status(403).json({ error: 'Your role is not permitted to change ticket category.' });
 
   try {
     const ticketRes = await db.query('SELECT * FROM tickets WHERE id = $1', [id]);
@@ -3161,7 +3196,7 @@ app.patch('/api/tickets/:id/department', async (req, res) => {
   const { department } = req.body;
   const user = requireUser(req, res);
   if (!user) return;
-  if (user.role !== 'Super Admin') return res.status(403).json({ error: 'Only Super Admins can reassign departments.' });
+  if (!(await roleCan(user, 'tickets', 'manage'))) return res.status(403).json({ error: 'Your role is not permitted to reassign ticket departments.' });
 
   try {
     const ticketRes = await db.query('SELECT * FROM tickets WHERE id = $1', [id]);
@@ -3188,7 +3223,7 @@ app.post('/api/tickets/:id/auto-assign', async (req, res) => {
   const { id } = req.params;
   const user = requireUser(req, res);
   if (!user) return;
-  if (user.role === 'Employee') return res.status(403).json({ error: 'Employees cannot trigger auto-assign.' });
+  if (!(await roleCan(user, 'tickets', 'edit'))) return res.status(403).json({ error: 'Your role is not permitted to auto-assign tickets.' });
 
   try {
     const ticketRes = await db.query('SELECT * FROM tickets WHERE id = $1', [id]);
@@ -3630,6 +3665,9 @@ app.patch('/api/users/:id', async (req, res) => {
     // Roles grant permissions, so a change is worth telling the admins about. Keyed
     // on the destination role: setting the same role twice is not a second event.
     if (role && role !== user.role) {
+      // Immediacy: the next request from this user resolves the new role rather than
+      // the one baked into their JWT, so the change takes effect without a re-login.
+      invalidateUserRole(updated.id);
       notifications.notify('user.role_changed', `user-role:${updated.id}:${role}`, {
         name: updated.name || updated.username,
         username: updated.username,
@@ -3933,7 +3971,7 @@ if (INTERNAL_CRON_ENABLED) {
 // --- KNOWLEDGE BASE + HELPDESK OPTIONS ---
 // Registered before the catch-all so its routes are reachable.
 knowledgeBase.register(app, { requireUser });
-purchaseOrders.register(app, { requireUser });
+purchaseOrders.register(app, { requirePermission });
 
 // --- 404 handler for unmatched API routes (JSON, not Express's default HTML page) ---
 app.use('/api', (req, res) => {

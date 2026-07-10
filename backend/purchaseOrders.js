@@ -16,7 +16,6 @@ const db = require('./db');
 
 const PO_STATUSES = ['Draft', 'Issued', 'Partially Received', 'Received', 'Cancelled'];
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD'];
-const MANAGE_ROLES = ['Super Admin', 'Finance Team'];
 
 const SORTABLE = {
   poNumber: 'po_number',
@@ -89,16 +88,8 @@ const replaceAttachments = async (client, poId, attachments, actor) => {
   }
 };
 
-function register(app, { requireUser }) {
-  const requireManager = (req, res) => {
-    const user = requireUser(req, res);
-    if (!user) return null;
-    if (!MANAGE_ROLES.includes(user.role)) {
-      res.status(403).json({ error: 'Only the Finance Team or Super Admins can manage purchase orders.' });
-      return null;
-    }
-    return user;
-  };
+function register(app, { requirePermission }) {
+  // Purchase orders live under Finance; gate by the finance module verbs.
 
   app.get('/api/purchase-orders/options', (req, res) => {
     res.json({ statuses: PO_STATUSES, currencies: CURRENCIES });
@@ -106,11 +97,8 @@ function register(app, { requireUser }) {
 
   // List with search, filter and sort. Employees have no business here.
   app.get('/api/purchase-orders', async (req, res) => {
-    const user = requireUser(req, res);
+    const user = await requirePermission(req, res, 'finance', 'view');
     if (!user) return;
-    if (user.role === 'Employee') {
-      return res.status(403).json({ error: 'Purchase orders are not visible to employees.' });
-    }
 
     const { q, status, vendor, sortBy, sortDir } = req.query;
     const filters = [];
@@ -146,11 +134,8 @@ function register(app, { requireUser }) {
   });
 
   app.get('/api/purchase-orders/:id', async (req, res) => {
-    const user = requireUser(req, res);
+    const user = await requirePermission(req, res, 'finance', 'view');
     if (!user) return;
-    if (user.role === 'Employee') {
-      return res.status(403).json({ error: 'Purchase orders are not visible to employees.' });
-    }
     try {
       const { rows } = await db.query('SELECT * FROM purchase_orders WHERE id = $1', [req.params.id]);
       if (rows.length === 0) return res.status(404).json({ error: 'Purchase order not found' });
@@ -162,7 +147,7 @@ function register(app, { requireUser }) {
   });
 
   app.post('/api/purchase-orders', async (req, res) => {
-    const user = requireManager(req, res);
+    const user = await requirePermission(req, res, 'finance', 'create');
     if (!user) return;
 
     const problem = validate(req.body);
@@ -202,7 +187,7 @@ function register(app, { requireUser }) {
   });
 
   app.patch('/api/purchase-orders/:id', async (req, res) => {
-    const user = requireManager(req, res);
+    const user = await requirePermission(req, res, 'finance', 'edit');
     if (!user) return;
     const id = parseInt(req.params.id, 10);
 
@@ -265,7 +250,7 @@ function register(app, { requireUser }) {
   });
 
   app.delete('/api/purchase-orders/:id', async (req, res) => {
-    const user = requireManager(req, res);
+    const user = await requirePermission(req, res, 'finance', 'delete');
     if (!user) return;
     try {
       // Attachments cascade. Assets keep their purchase_order_id set to NULL.
