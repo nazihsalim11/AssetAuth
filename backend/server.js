@@ -10,6 +10,7 @@ const { runMigrations } = require('./migrations');
 const storage = require('./storage');
 const notifications = require('./notifications');
 const scheduler = require('./notifications/scheduler');
+const { registerCronRoutes } = require('./cronRoutes');
 const knowledgeBase = require('./knowledgeBase');
 const purchaseOrders = require('./purchaseOrders');
 
@@ -3692,18 +3693,37 @@ app.post('/api/files/signed-url', async (req, res) => {
 // Expiry reminders change once a day, so a daily sweep is enough. SLA deadlines are
 // measured in hours, so a daily job would report most breaches long after the fact —
 // that check runs hourly. Failed email/SMS deliveries are retried on their own timer.
-const runStartupChecks = async () => {
-  await scheduler.runDailyChecks();
-  await scheduler.runSlaChecks();
-};
+//
+// node-cron only fires while this process is alive. On a host that sleeps an idle
+// web service (Render's free tier, for one) the schedules simply stop, silently —
+// no notifications, no SLA escalations, and nothing in the logs to say so. There
+// the jobs are driven over HTTP instead, by Supabase pg_cron or GitHub Actions:
+// set DISABLE_INTERNAL_CRON=true and CRON_SECRET, and see backend/sql/supabase_cron.sql.
+const INTERNAL_CRON_ENABLED = process.env.DISABLE_INTERNAL_CRON !== 'true';
+const CRON_SECRET = process.env.CRON_SECRET || '';
 
-runStartupChecks().catch((err) => console.error('Startup notification checks failed:', err));
+registerCronRoutes(app, { scheduler, notifications, secret: CRON_SECRET });
 
-cron.schedule('0 0 * * *', () => scheduler.runDailyChecks());   // 00:00 daily
-cron.schedule('0 * * * *', () => scheduler.runSlaChecks());     // hourly, on the hour
-cron.schedule('*/15 * * * *', () => {                            // retry failed sends
-  notifications.retryFailed().catch((err) => console.error('Notification retry failed:', err));
-});
+if (INTERNAL_CRON_ENABLED) {
+  const runStartupChecks = async () => {
+    await scheduler.runDailyChecks();
+    await scheduler.runSlaChecks();
+  };
+
+  runStartupChecks().catch((err) => console.error('Startup notification checks failed:', err));
+
+  cron.schedule('0 0 * * *', () => scheduler.runDailyChecks());   // 00:00 daily
+  cron.schedule('0 * * * *', () => scheduler.runSlaChecks());     // hourly, on the hour
+  cron.schedule('*/15 * * * *', () => {                            // retry failed sends
+    notifications.retryFailed().catch((err) => console.error('Notification retry failed:', err));
+  });
+} else if (!CRON_SECRET) {
+  // Loud, because the alternative is a deployment where nothing is scheduled at all
+  // and the first anyone hears of it is a missed SLA.
+  console.error('[cron] DISABLE_INTERNAL_CRON=true but CRON_SECRET is unset: no job can run, in-process or over HTTP.');
+} else {
+  console.log('[cron] in-process scheduler disabled; expecting external triggers on /api/internal/cron/*');
+}
 
 // --- KNOWLEDGE BASE + HELPDESK OPTIONS ---
 // Registered before the catch-all so its routes are reachable.
