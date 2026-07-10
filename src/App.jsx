@@ -47,6 +47,9 @@ import { mockAuthService } from './auth'
 import LoginView from './LoginView'
 import CustomSelect from './CustomSelect'
 import RelativeTime from './RelativeTime'
+import AsyncBoundary from './AsyncBoundary'
+import { STATUS } from './asyncStatus'
+import { PageSkeleton } from './Skeleton'
 import { useAnchoredOverlay } from './useAnchoredOverlay'
 import { lockBodyScroll, unlockBodyScroll } from './scrollLock'
 import { api } from './api'
@@ -1285,6 +1288,20 @@ function App() {
 
   const [isApiConnected, setIsApiConnected] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
+  // A failed load must not look like an empty database. Hold the error so the page
+  // can say "we could not ask" rather than rendering 0 assets and "No data".
+  const [loadError, setLoadError] = useState(null);
+  const [reloadToken, setReloadToken] = useState(0);
+  const retryInitialLoad = React.useCallback(() => {
+    setLoadError(null);
+    setReloadToken((t) => t + 1);
+  }, []);
+
+  const dataStatus = isInitialLoading
+    ? STATUS.LOADING
+    : loadError
+      ? STATUS.ERROR
+      : STATUS.READY;
 
   // Reload live data from PostgreSQL whenever the authenticated identity changes.
   //
@@ -1315,6 +1332,7 @@ function App() {
     }
 
     setIsInitialLoading(true);
+    setLoadError(null);
     (async () => {
       try {
         const connected = await api.checkConnection();
@@ -1369,10 +1387,17 @@ function App() {
 
           setIsApiConnected(true);
         } else {
-          console.log('[AssetFlow] API backend offline. Using LocalStorage fallback.');
+          // There is no local fallback any more. Saying nothing here left every
+          // page rendering zeros against empty arrays, which reads as real data.
+          setIsApiConnected(false);
+          setLoadError(new Error('Unable to reach the server. It may be starting up, or temporarily unavailable.'));
         }
       } catch (err) {
-        if (!cancelled) console.warn('[AssetFlow] PostgreSQL backend connection error. Reverting to LocalStorage.', err);
+        if (!cancelled) {
+          console.error('[AssetFlow] Initial data load failed:', err);
+          setIsApiConnected(false);
+          setLoadError(err instanceof Error ? err : new Error(String(err)));
+        }
       } finally {
         if (!cancelled) setIsInitialLoading(false);
       }
@@ -1380,7 +1405,7 @@ function App() {
 
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authKey]);
+  }, [authKey, reloadToken]);
 
   // Re-reads the custodian registry from the server. The backend inner-joins assets
   // and users, so whatever it returns is guaranteed to reference records that still
@@ -3758,6 +3783,12 @@ function App() {
               {...silk.entrance}
               style={{ width: '100%' }}
             >
+            <AsyncBoundary
+              status={dataStatus}
+              error={loadError}
+              onRetry={retryInitialLoad}
+              skeleton={<PageSkeleton />}
+            >
           
           {/* ==================== DASHBOARD PANEL ==================== */}
           {activeTab === 'dashboard' && (
@@ -4229,15 +4260,27 @@ function App() {
                 </div>
                 <div className="page-actions">
                   <button
-                    className={`btn ${showEmployeeLookup ? 'btn-primary' : 'btn-secondary'}`}
-                    onClick={() => setShowEmployeeLookup(v => !v)}
+                    className="btn btn-secondary"
+                    onClick={() => setShowEmployeeLookup(true)}
                   >
                     <Search size={15} /> Employee Asset Lookup
                   </button>
                 </div>
               </div>
 
-              {showEmployeeLookup && <EmployeeAssetLookup addToast={addToast} />}
+              {/* A popup rather than an inline panel: the lookup is a reference tool, so
+                  it must not push the allocation tables down the page or lose your
+                  place when you close it. */}
+              <Modal
+                isOpen={showEmployeeLookup}
+                onClose={() => setShowEmployeeLookup(false)}
+                title="Employee Asset Lookup"
+                subtitle="Search the directory, then review everything that person holds."
+                size="full"
+                closeOnOverlayClick
+              >
+                <EmployeeAssetLookup addToast={addToast} />
+              </Modal>
 
               <div className="dashboard-grid-secondary">
                 {/* Allocations Form */}
@@ -4464,6 +4507,13 @@ function App() {
                   <span className="card-title">Register Maintenance Agreement</span>
                   {hasPermission('finance') ? (
                     <form onSubmit={handleAddAMC} className="form-grid">
+                      <div className="form-group full-width">
+                        <label className="form-label">PO Number *</label>
+                        <input type="text" name="poNumber" placeholder="e.g. PO-2026-014" className="form-input" required />
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                          The contract's business identifier. Must be unique across all AMCs.
+                        </span>
+                      </div>
                       <div className="form-group">
                         <label className="form-label">Support Vendor Partner</label>
                         <input type="text" name="vendor" placeholder="e.g. Carrier CoolCare" className="form-input" required />
@@ -4493,13 +4543,6 @@ function App() {
                           value={newAmcServiceSchedule}
                           onChange={(e) => setNewAmcServiceSchedule(e.target.value)}
                         />
-                      </div>
-                      <div className="form-group full-width">
-                        <label className="form-label">PO Number *</label>
-                        <input type="text" name="poNumber" placeholder="e.g. PO-2026-014" className="form-input" required />
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                          The contract's business identifier. Must be unique across all AMCs.
-                        </span>
                       </div>
                       <div className="form-group">
                         <label className="form-label">SLA Agreement Document</label>
@@ -4677,6 +4720,12 @@ function App() {
                 >
                   📁 All Invoices ({invoices.length})
                 </button>
+                <button
+                  className={`tab-btn ${financeSubTab === 'purchase_orders' ? 'active' : ''}`}
+                  onClick={() => { setFinanceSubTab('purchase_orders'); setSelectedInvoiceIds([]); }}
+                >
+                  🧾 Purchase Orders
+                </button>
                 <button 
                   className={`tab-btn ${financeSubTab === 'pending_upload' ? 'active' : ''}`} 
                   onClick={() => { setFinanceSubTab('pending_upload'); setSelectedInvoiceIds([]); }}
@@ -4688,12 +4737,6 @@ function App() {
                   onClick={() => { setFinanceSubTab('asset_mapping'); setSelectedInvoiceIds([]); }}
                 >
                   🔗 Bidirectional Asset Mapping
-                </button>
-                <button
-                  className={`tab-btn ${financeSubTab === 'purchase_orders' ? 'active' : ''}`}
-                  onClick={() => { setFinanceSubTab('purchase_orders'); setSelectedInvoiceIds([]); }}
-                >
-                  🧾 Purchase Orders
                 </button>
               </div>
 
@@ -5855,6 +5898,7 @@ function App() {
               addToast={addToast}
             />
           )}
+            </AsyncBoundary>
             </motion.div>
           </AnimatePresence>
 

@@ -14,6 +14,9 @@ import FloatingBulkBar from './FloatingBulkBar';
 import Checkbox from './Checkbox';
 import RelativeTime from './RelativeTime';
 import { parseTimestamp } from './time';
+import AsyncBoundary from './AsyncBoundary';
+import { STATUS } from './asyncStatus';
+import { PageSkeleton } from './Skeleton';
 
 const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addToast }) => {
   const [tickets, setTickets] = useState([]);
@@ -82,38 +85,57 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef(null);
 
-  // Load tickets
-  const loadTickets = async () => {
-    if (isApiConnected) {
-      try {
-        const data = await api.getTickets();
-        setTickets(data);
-        const stats = await api.getTicketsAnalytics();
-        setAnalytics(stats);
-      } catch (err) {
-        console.error("Failed to load tickets from API", err);
-      }
-    } else {
-      // Local fallback
-      const localTickets = JSON.parse(localStorage.getItem('db_tickets') || '[]');
-      
-      // Filter based on role and department
-      let filtered = [];
-      if (currentRole === 'Super Admin') {
-        filtered = localTickets;
-      } else if (currentRole === 'Employee') {
-        filtered = localTickets.filter(t => t.createdBy === currentUser?.username || t.createdBy === 'employee' || t.createdByName === currentUser?.name);
-      } else {
-        filtered = localTickets.filter(t => t.department === (currentUser?.department || currentRole.split(' ')[0]));
-      }
-      
-      setTickets(filtered);
-      calculateLocalAnalytics(localTickets);
+  const [ticketsStatus, setTicketsStatus] = useState(STATUS.LOADING);
+  const [ticketsError, setTicketsError] = useState(null);
+
+  /**
+   * Loads the queue.
+   *
+   * The old version swallowed a failed fetch into console.error, leaving `tickets`
+   * empty and `analytics.counts` at its initial zeros — so a backend outage rendered
+   * as "0 tickets", indistinguishable from a genuinely empty queue. It also read a
+   * `db_tickets` key from localStorage and presented it as live data. (The mutation
+   * handlers below still have offline branches that write that key; they are now
+   * unreachable, because App refuses to render a page when the API is down.)
+   *
+   * A failure on the *first* load becomes an error state with a Retry. A failure on a
+   * background refresh (there is one after each mutation) must not wipe a working
+   * screen, so it surfaces as a toast and leaves the data alone.
+   */
+  const loadTickets = async ({ firstLoad = ticketsStatus === STATUS.LOADING } = {}) => {
+    if (!isApiConnected) {
+      setTicketsError(new Error('Not connected to the server.'));
+      setTicketsStatus(STATUS.ERROR);
+      return;
     }
+
+    try {
+      const [data, stats] = await Promise.all([api.getTickets(), api.getTicketsAnalytics()]);
+      setTickets(data || []);
+      // Guard the shape: the stat cards read analytics.counts unconditionally.
+      if (stats && stats.counts) setAnalytics(stats);
+      setTicketsError(null);
+      setTicketsStatus(STATUS.READY);
+    } catch (err) {
+      console.error('Failed to load tickets from API', err);
+      if (firstLoad) {
+        setTicketsError(err);
+        setTicketsStatus(STATUS.ERROR);
+      } else {
+        addToast('Refresh failed', err.message || 'Could not refresh the ticket queue.', 'error');
+      }
+    }
+  };
+
+  const retryLoadTickets = () => {
+    setTicketsError(null);
+    setTicketsStatus(STATUS.LOADING);
+    loadTickets({ firstLoad: true });
   };
 
   useEffect(() => {
     loadTickets();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isApiConnected, currentRole, currentUser]);
 
   // SLA Live Countdown Tick
@@ -130,43 +152,6 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
     setSelectedTicketIds([]);
   }, [selectedView, searchQuery, filterStatus, filterPriority, filterDepartment, filterCategory, filterAssignee, filterRequester]);
 
-  const calculateLocalAnalytics = (allTickets) => {
-    const scopeTickets = currentRole === 'Super Admin' 
-      ? allTickets 
-      : allTickets.filter(t => t.department === (currentUser?.department || currentRole.split(' ')[0]));
-
-    const counts = { total: scopeTickets.length, open: 0, inProgress: 0, waiting: 0, resolved: 0, closed: 0, overdue: 0, avgResolutionTimeHours: 0 };
-    const byPriority = {};
-    const byDepartment = {};
-
-    let resolvedCount = 0;
-    let totalResolutionTime = 0;
-
-    scopeTickets.forEach(t => {
-      if (t.status === 'Open') counts.open++;
-      else if (t.status === 'In Progress') counts.inProgress++;
-      else if (t.status === 'Waiting for Employee') counts.waiting++;
-      else if (t.status === 'Resolved') counts.resolved++;
-      else if (t.status === 'Closed') counts.closed++;
-
-      // Check SLA Overdue
-      const deadline = new Date(t.slaDeadline);
-      if (deadline < new Date() && t.status !== 'Resolved' && t.status !== 'Closed') {
-        counts.overdue++;
-      }
-
-      byPriority[t.priority] = (byPriority[t.priority] || 0) + 1;
-      byDepartment[t.department] = (byDepartment[t.department] || 0) + 1;
-
-      if (t.resolvedAt && t.createdAt) {
-        resolvedCount++;
-        totalResolutionTime += (new Date(t.resolvedAt) - new Date(t.createdAt)) / 3600000;
-      }
-    });
-
-    counts.avgResolutionTimeHours = resolvedCount > 0 ? parseFloat((totalResolutionTime / resolvedCount).toFixed(1)) : 0;
-    setAnalytics({ counts, byPriority, byDepartment });
-  };
 
   // Handle Attachment Upload
   const handleAttachmentUpload = async (e) => {
@@ -966,6 +951,13 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
   const distinctDepartments = ['IT', 'HR', 'Finance', 'Operations'];
 
   return (
+    <AsyncBoundary
+      status={ticketsStatus}
+      error={ticketsError}
+      onRetry={retryLoadTickets}
+      errorTitle="Unable to load the ticket queue"
+      skeleton={<PageSkeleton cards={4} rows={8} />}
+    >
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
       
       {/* 1. Dashboard View (Ticketing Registry Queue) */}
@@ -1919,6 +1911,7 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
         </Modal>
       )}
     </div>
+    </AsyncBoundary>
   );
 };
 
