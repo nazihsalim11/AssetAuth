@@ -3,7 +3,7 @@ import { AnimatePresence } from 'framer-motion';
 import { 
   Plus, Eye, MessageSquare, AlertCircle, Clock, ChevronDown, Check, 
   Trash2, Send, Paperclip, ClipboardList, Info, FileText, CheckCircle2,
-  Users, User, UserCheck, AlertTriangle, X, Search, Filter, ArrowLeft, RefreshCw, BookOpen, Lightbulb, 
+  Users, User, UserCheck, AlertTriangle, Search, Filter, ArrowLeft, RefreshCw, BookOpen, Lightbulb, 
   Layers, CheckSquare, Square, Building, ShieldCheck, Mail, Tag, HelpCircle
 } from 'lucide-react';
 import { api } from './api';
@@ -1287,15 +1287,18 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
           {/* Floating Bulk Action Toolbar */}
           <AnimatePresence>
             {selectedTicketIds.length > 0 && (
-              <FloatingBulkBar>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderRight: '1px solid var(--border-color)', paddingRight: '16px' }}>
-                  <Layers size={18} style={{ color: 'var(--primary)' }} />
-                  <span style={{ fontWeight: 600, fontSize: '14px', whiteSpace: 'nowrap' }}>
-                    {selectedTicketIds.length} selected
-                  </span>
-                </div>
-
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
+              <FloatingBulkBar
+                onClear={() => setSelectedTicketIds([])}
+                summary={
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderRight: '1px solid var(--border-color)', paddingRight: '16px' }}>
+                    <Layers size={18} style={{ color: 'var(--primary)' }} />
+                    <span style={{ fontWeight: 600, fontSize: '14px', whiteSpace: 'nowrap' }}>
+                      {selectedTicketIds.length} selected
+                    </span>
+                  </div>
+                }
+                actions={
+                  <>
                   {/* Status update */}
                   <div style={{ display: 'flex', gap: '4px' }}>
                     <select
@@ -1383,22 +1386,9 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
                     <Trash2 size={13} />
                     Delete
                   </button>
-                </div>
-
-                <button 
-                  onClick={() => setSelectedTicketIds([])}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: 'var(--text-muted)',
-                    marginLeft: '8px',
-                    cursor: 'pointer'
-                  }}
-                  title="Deselect All"
-                >
-                  <X size={16} />
-                </button>
-              </FloatingBulkBar>
+                  </>
+                }
+              />
             )}
           </AnimatePresence>
         </>

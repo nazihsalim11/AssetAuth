@@ -1991,7 +1991,11 @@ select.form-input {
   right: 0;
   margin-inline: auto;
   width: max-content;
-  max-width: min(92vw, 960px);
+  /* Measured: a full action set needs ~1145px to sit on one row (969px of controls
+     plus summary, clear button, gaps and padding). The old 960px cap meant the bar
+     wrapped to 2-3 rows at every viewport, however wide. Below the collapse
+     breakpoint the actions move into an overflow menu instead. */
+  max-width: min(92vw, 1200px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2020,6 +2024,95 @@ select.form-input {
    a toolbar overflow instead of wrapping. Let the groups shrink and wrap. */
 .floating-bulk-bar > * {
   min-width: 0;
+}
+
+.bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+/* Collapsed: the bar is one short row — summary, an Actions trigger, a clear
+   button — so it cannot grow past a single line on a phone. */
+.floating-bulk-bar.is-collapsed {
+  flex-wrap: nowrap;
+  max-height: none;
+  overflow: visible;
+}
+
+.bulk-more-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.bulk-more-chevron {
+  transition: transform var(--dur-2) var(--ease-out);
+}
+
+.bulk-more-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.bulk-clear-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: var(--sp-1);
+  border-radius: var(--radius-sm);
+}
+
+.bulk-clear-btn:hover {
+  color: var(--text-primary);
+}
+
+/* The overflow menu. Portaled to <body> and anchored by useAnchoredOverlay, so it
+   flips above the bar and stays inside the viewport. Layered above the bar. */
+.bulk-actions-panel {
+  position: fixed;
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  animation: selectSlideDown var(--dur-2) var(--ease-out);
+}
+
+/* The same controls, stacked one per row. */
+.bulk-actions-panel > * {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-width: 0;
+}
+
+/* The controls carry their bar widths inline (130px, 140px), which no selector can
+   outrank. Inside the panel they must be fluid instead, so this is the one place
+   !important is warranted — the alternative is rewriting every caller's styles. */
+.bulk-actions-panel .form-input {
+  width: auto !important;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.bulk-actions-panel .btn {
+  flex-shrink: 0;
 }
 
 /* The bar floats above the page, so the page must reserve its measured height —
