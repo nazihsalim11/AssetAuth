@@ -12,6 +12,7 @@ import Modal from './Modal';
 import Markdown from './Markdown';
 import FloatingBulkBar from './FloatingBulkBar';
 import RelativeTime from './RelativeTime';
+import { parseTimestamp } from './time';
 
 const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addToast }) => {
   const [tickets, setTickets] = useState([]);
@@ -844,8 +845,14 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
       return <span className="sla-badge good">Resolved</span>;
     }
 
-    const deadline = new Date(deadlineStr);
-    const diff = deadline - Date.now();
+    // NaN < 0 is false, so an unparseable deadline used to fall through the
+    // Overdue branch and render the literal "NaNh NaNm left".
+    const deadline = parseTimestamp(deadlineStr);
+    if (!deadline) {
+      return <span className="sla-badge">No SLA</span>;
+    }
+
+    const diff = deadline.getTime() - Date.now();
 
     if (diff < 0) {
       return <span className="sla-badge urgent">Overdue</span>;
