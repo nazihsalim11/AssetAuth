@@ -814,17 +814,22 @@ h5, h6 { font-size: var(--fs-sm); letter-spacing: 0; }
    08  NOTIFICATIONS POPOVER
    ============================================================ */
 
+/* Portaled to <body> and anchored by useAnchoredOverlay. As an absolute child of
+   .top-header it was trapped in that header's stacking context (sticky, z-index 90,
+   backdrop-filter), so its z-index could never lift it above the sidebar (100),
+   toasts (999) or the bulk bar (1000). */
 .notif-popover {
-  position: absolute;
-  top: calc(100% + 10px);
-  right: 0;
-  width: 340px;
+  position: fixed;
   background: var(--bg-modal);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
-  z-index: 200;
+  z-index: 1100;
   overflow: hidden;
+  /* Column layout so a viewport-capped max-height shrinks the scrolling body
+     rather than clipping the footer off the bottom. */
+  display: flex;
+  flex-direction: column;
   transform-origin: top right;
   animation: popover-in var(--dur-2) var(--ease-out);
 }
@@ -869,6 +874,10 @@ h5, h6 { font-size: var(--fs-sm); letter-spacing: 0; }
 .notif-body {
   max-height: 320px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  /* min-height:0 is what lets this shrink inside the flex column above. */
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .notif-item {
@@ -1944,7 +1953,7 @@ select.form-input {
   background: var(--status-disposed-bg);
 }
 
-/* ---- Bulk action toolbar (previously unstyled) ---- */
+/* ---- Bulk action toolbar (rendered through <FloatingBulkBar>) ---- */
 .floating-bulk-bar {
   position: fixed;
   bottom: var(--sp-6);
@@ -1957,6 +1966,17 @@ select.form-input {
   max-width: min(92vw, 960px);
   display: flex;
   align-items: center;
+  justify-content: center;
+  /* Wrap at every width, not just mobile: the bar's intrinsic width exceeds the
+     960px cap on its own, and under 125–150% browser zoom the CSS viewport is
+     narrow enough that a nowrap bar overflows horizontally and clips actions. */
+  flex-wrap: wrap;
+  /* Wrapping alone lets a many-action bar grow to ~40% of a short viewport.
+     Cap it and scroll internally so it can never dominate the screen; the
+     reserved page padding tracks the capped height, not the intrinsic one. */
+  max-height: 40vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   gap: var(--sp-4);
   padding: var(--sp-3) var(--sp-5);
   background: var(--bg-elevated);
@@ -1966,6 +1986,19 @@ select.form-input {
   backdrop-filter: saturate(180%) blur(12px);
   -webkit-backdrop-filter: saturate(180%) blur(12px);
   z-index: 1000;
+}
+
+/* A flex item's automatic minimum size is its content width, which is what makes
+   a toolbar overflow instead of wrapping. Let the groups shrink and wrap. */
+.floating-bulk-bar > * {
+  min-width: 0;
+}
+
+/* The bar floats above the page, so the page must reserve its measured height —
+   otherwise it covers the last table rows and the pagination controls.
+   FloatingBulkBar publishes --bulk-bar-height and toggles .has-bulk-bar. */
+.has-bulk-bar .page-container {
+  padding-bottom: calc(var(--bulk-bar-height, 0px) + var(--sp-8));
 }
 
 /* ============================================================
@@ -2257,12 +2290,15 @@ select.form-input {
 }
 
 .custom-select-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  right: 0;
+  /* Portaled to <body> and positioned from the trigger's viewport rect by
+     useAnchoredOverlay, which supplies top/bottom/left/width/max-height inline.
+     Absolute positioning kept the menu inside its scroll ancestor, where it was
+     clipped and inflated that ancestor's scrollHeight into a nested scrollbar. */
+  position: fixed;
   max-height: 240px;
   overflow-y: auto;
+  /* Do not chain the menu's scroll to the page or a modal body behind it. */
+  overscroll-behavior: contain;
   background-color: var(--bg-elevated);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -3748,18 +3784,12 @@ select.form-input {
     right: var(--sp-3);
     width: auto;
     max-width: none;
-    flex-wrap: wrap;
     padding: var(--sp-3);
     gap: var(--sp-3);
   }
 
-  .notif-popover {
-    position: fixed;
-    top: calc(var(--header-h) + 8px);
-    left: var(--sp-3);
-    right: var(--sp-3);
-    width: auto;
-  }
+  /* No .notif-popover override here any more: useAnchoredOverlay already clamps
+     its width and position into the viewport on every screen size. */
 
   .doc-grid {
     grid-template-columns: 1fr;

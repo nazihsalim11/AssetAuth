@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { AnimatePresence } from 'framer-motion';
 import { 
   Plus, Eye, MessageSquare, AlertCircle, Clock, ChevronDown, Check, 
   Trash2, Send, Paperclip, ClipboardList, Info, FileText, CheckCircle2,
@@ -10,6 +10,7 @@ import { api } from './api';
 import { openStoredFile } from './files';
 import Modal from './Modal';
 import Markdown from './Markdown';
+import FloatingBulkBar from './FloatingBulkBar';
 
 const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addToast }) => {
   const [tickets, setTickets] = useState([]);
@@ -1285,12 +1286,7 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
           {/* Floating Bulk Action Toolbar */}
           <AnimatePresence>
             {selectedTicketIds.length > 0 && (
-              <motion.div
-                initial={{ y: 100, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                exit={{ y: 100, opacity: 0 }}
-                className="floating-bulk-bar"
-              >
+              <FloatingBulkBar>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderRight: '1px solid var(--border-color)', paddingRight: '16px' }}>
                   <Layers size={18} style={{ color: 'var(--primary)' }} />
                   <span style={{ fontWeight: 600, fontSize: '14px', whiteSpace: 'nowrap' }}>
@@ -1401,7 +1397,7 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
                 >
                   <X size={16} />
                 </button>
-              </motion.div>
+              </FloatingBulkBar>
             )}
           </AnimatePresence>
         </>
