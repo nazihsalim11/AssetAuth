@@ -419,6 +419,13 @@ app.get('/api/invoices', async (req, res) => {
   }
 });
 
+// Who performed the request, for notification payloads. Falls back to 'System' when
+// the route has no session (schedulers, internal calls).
+const actorOf = (req) => {
+  const { user } = authenticateRequest(req);
+  return (user && (user.name || user.username)) || 'System';
+};
+
 app.post('/api/invoices', async (req, res) => {
   const { id, poReference, vendor, amount, gst, date, paymentStatus, fileName } = req.body;
   const query = `
@@ -430,7 +437,17 @@ app.post('/api/invoices', async (req, res) => {
 
   try {
     const result = await db.query(query, values);
-    res.status(201).json(result.rows[0]);
+    const invoice = result.rows[0];
+    res.status(201).json(invoice);
+
+    notifications.notify('finance.invoice_created', `invoice-created:${invoice.id}`, {
+      invoiceId: invoice.id,
+      vendor: invoice.vendor,
+      amount: invoice.amount,
+      poReference: invoice.po_reference,
+      paymentStatus: invoice.payment_status,
+      actor: actorOf(req)
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Database insertion failed: ' + err.message });
@@ -465,7 +482,19 @@ app.patch('/api/invoices/:id', async (req, res) => {
   try {
     const result = await db.query(query, values);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Invoice not found' });
-    res.json(result.rows[0]);
+    const invoice = result.rows[0];
+    res.json(invoice);
+
+    // Invoices carry no due date, so "overdue" is a status somebody sets. The event
+    // key is the invoice id, so re-saving an already-overdue invoice notifies once.
+    if (paymentStatus === 'Overdue') {
+      notifications.notify('finance.invoice_overdue', `invoice-overdue:${invoice.id}`, {
+        invoiceId: invoice.id,
+        vendor: invoice.vendor,
+        amount: invoice.amount,
+        date: invoice.date
+      });
+    }
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Database update failed: ' + err.message });
@@ -1122,6 +1151,13 @@ app.patch('/api/role-permissions', async (req, res) => {
     }
     await client.query('COMMIT');
     rolePermissionsCache = null; // force a fresh read on the next enforcement check
+
+    // Timestamped: every permissions edit is its own event, never deduplicated away.
+    notifications.notify('security.permissions_changed', `permissions-changed:${Date.now()}`, {
+      actor: user.name || user.username,
+      summary: Object.keys(updates).join(', ')
+    });
+
     await db.query(
       `INSERT INTO system_logs (actor, action, detail) VALUES ($1,'Role Permissions',$2)`,
       [user.name || user.username, `Updated: ${Object.keys(updates).join(', ')}`]
@@ -1812,6 +1848,18 @@ async function processEmployeeImport(jobId, employees) {
       ]
     );
 
+    // Keyed on the import job, so a retried request does not re-notify.
+    notifications.notify('system.bulk_import_completed', `import:employees:${jobId}`, {
+      kind: 'employee',
+      total: summary.total,
+      success: summary.success,
+      failed: summary.failed,
+      duplicate: summary.duplicate,
+      // This runs in a background worker, with no request in scope. The matching
+      // system_logs row records 'Admin' for the same reason.
+      actor: 'Admin'
+    });
+
     await client.query('COMMIT');
     summary.errors.sort((a, b) => a.row - b.row);
     await finishImportJob(jobId, 'completed', summary);
@@ -1983,6 +2031,15 @@ app.post('/api/import/assets', async (req, res) => {
         `Imported assets. Total: ${summary.total}, Success: ${summary.success}, Failed: ${summary.failed}, Duplicate: ${summary.duplicate}`
       ]
     );
+
+    notifications.notify('system.bulk_import_completed', `import:assets:${Date.now()}`, {
+      kind: 'asset',
+      total: summary.total,
+      success: summary.success,
+      failed: summary.failed,
+      duplicate: summary.duplicate,
+      actor
+    });
 
     await client.query('COMMIT');
     res.json(summary);
@@ -3338,6 +3395,12 @@ app.post('/api/auth/change-password', async (req, res) => {
     );
 
     res.json({ message: 'Password updated successfully.' });
+
+    // Timestamped key: a second password change is a second event, not a duplicate.
+    notifications.notify('security.password_changed', `password-changed:${user.id}:${Date.now()}`, {
+      username: user.username,
+      at: new Date().toISOString()
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to update password.' });
@@ -3412,6 +3475,14 @@ app.post('/api/users', async (req, res) => {
     });
     await client.query('COMMIT');
     res.status(201).json(createdUser);
+
+    notifications.notify('user.created', `user-created:${createdUser.id}`, {
+      name: createdUser.name || createdUser.username,
+      username: createdUser.username,
+      role: createdUser.role,
+      department: createdUser.department,
+      actor: actorOf(req)
+    });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Error during manual user creation:', err);
@@ -3531,7 +3602,20 @@ app.patch('/api/users/:id', async (req, res) => {
     const result = await client.query(query, values);
     
     await client.query('COMMIT');
-    res.json(result.rows[0]);
+    const updated = result.rows[0];
+    res.json(updated);
+
+    // Roles grant permissions, so a change is worth telling the admins about. Keyed
+    // on the destination role: setting the same role twice is not a second event.
+    if (role && role !== user.role) {
+      notifications.notify('user.role_changed', `user-role:${updated.id}:${role}`, {
+        name: updated.name || updated.username,
+        username: updated.username,
+        previousRole: user.role,
+        newRole: role,
+        actor: actorOf(req)
+      });
+    }
   } catch (err) {
     await client.query('ROLLBACK');
     console.error(err);
@@ -3547,12 +3631,13 @@ app.delete('/api/users/:id', async (req, res) => {
   const client = await db.pool.connect();
   try {
     await client.query('BEGIN');
-    const check = await client.query('SELECT username, auth_id FROM users WHERE id = $1', [id]);
+    const check = await client.query('SELECT username, name, role, auth_id FROM users WHERE id = $1', [id]);
     if (check.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'User not found' });
     }
     const { username, auth_id } = check.rows[0];
+    const deletedUser = check.rows[0];
     
     // Find affected assets before deleting assignments
     const affectedAssets = await client.query('SELECT DISTINCT asset_id FROM asset_assignments WHERE user_id = $1', [id]);
@@ -3597,6 +3682,13 @@ app.delete('/api/users/:id', async (req, res) => {
 
     await client.query('COMMIT');
     res.json({ message: `User "${username}" deleted successfully` });
+
+    notifications.notify('user.deleted', `user-deleted:${id}`, {
+      name: deletedUser.name || deletedUser.username,
+      username: deletedUser.username,
+      role: deletedUser.role,
+      actor: actorOf(req)
+    });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error(err);

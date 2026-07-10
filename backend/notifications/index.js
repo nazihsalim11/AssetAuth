@@ -198,6 +198,31 @@ async function resolveRecipients(eventType, ctx) {
       return uniqueById(stakeholders);
     }
 
+    case 'finance.invoice_created':
+    case 'finance.invoice_overdue': {
+      // Money is Finance's problem first; admins see it because they see everything.
+      const stakeholders = await activeUsers(
+        'role::text = ANY($1::text[])',
+        [[...ADMIN_ROLES, 'Finance Team']]
+      );
+      return uniqueById(stakeholders);
+    }
+
+    case 'user.created':
+    case 'user.role_changed':
+    case 'user.deleted':
+      return uniqueById(await admins());
+
+    // Security events are deliberately narrower than the admin set. A password
+    // change or a permissions edit is exactly the kind of thing a compromised
+    // IT Admin account would do, so it is reported to Super Admins only.
+    case 'security.password_changed':
+    case 'security.permissions_changed':
+      return uniqueById(await activeUsers('role::text = $1', ['Super Admin']));
+
+    case 'system.bulk_import_completed':
+      return uniqueById(await admins());
+
     default:
       return admins();
   }

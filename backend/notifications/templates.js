@@ -21,6 +21,12 @@ const fmtDate = (value) => {
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+// Invoice amounts are rupees throughout the app.
+const money = (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? `Rs ${n.toLocaleString('en-IN')}` : String(value ?? 'an unknown amount');
+};
+
 const templates = {
   'ticket.created': (c) => ({
     type: c.priority === 'Critical' ? 'error' : c.priority === 'Medium' ? 'warning' : 'info',
@@ -168,6 +174,121 @@ const templates = {
       `\nRecommended action: begin renewal negotiation with ${c.vendor}, or arrange ` +
       `alternative cover before the contract lapses.\n\n— AssetFlow Contract Engine`,
     sms: `AssetFlow: AMC ${c.amcId} (${c.vendor}) expires in ${plural(c.daysRemaining, 'day')}`
+  }),
+
+  /* ------------------------------------------------------------- finance */
+
+  'finance.invoice_created': (c) => ({
+    type: 'info',
+    subject: `Invoice ${c.invoiceId} recorded (${c.vendor})`,
+    inApp: `Invoice ${c.invoiceId} from ${c.vendor} recorded for ${money(c.amount)}`,
+    email:
+      `A purchase invoice has been recorded.\n\n` +
+      `Invoice:   ${c.invoiceId}\n` +
+      `Vendor:    ${c.vendor}\n` +
+      `Amount:    ${money(c.amount)}\n` +
+      `PO:        ${c.poReference || 'not referenced'}\n` +
+      `Status:    ${c.paymentStatus}\n` +
+      `Recorded by: ${c.actor}\n\n— AssetFlow Finance`,
+    sms: `AssetFlow: invoice ${c.invoiceId} (${c.vendor}) ${money(c.amount)} recorded`
+  }),
+
+  'finance.invoice_overdue': (c) => ({
+    type: 'error',
+    subject: `OVERDUE: invoice ${c.invoiceId} (${c.vendor})`,
+    inApp: `Invoice ${c.invoiceId} from ${c.vendor} is now OVERDUE (${money(c.amount)})`,
+    email:
+      `An invoice has been marked overdue.\n\n` +
+      `Invoice:  ${c.invoiceId}\n` +
+      `Vendor:   ${c.vendor}\n` +
+      `Amount:   ${money(c.amount)}\n` +
+      `Dated:    ${fmtDate(c.date)}\n\n` +
+      `Recommended action: settle or dispute before the vendor escalates.\n\n— AssetFlow Finance`,
+    sms: `AssetFlow: invoice ${c.invoiceId} (${c.vendor}) is OVERDUE - ${money(c.amount)}`
+  }),
+
+  /* -------------------------------------------------------- user account */
+
+  'user.created': (c) => ({
+    type: 'info',
+    subject: `New account: ${c.name} (${c.role})`,
+    inApp: `${c.actor} created an account for ${c.name} (${c.role})`,
+    email:
+      `A user account has been created.\n\n` +
+      `Name:       ${c.name}\n` +
+      `Username:   ${c.username}\n` +
+      `Role:       ${c.role}\n` +
+      `Department: ${c.department || 'unassigned'}\n` +
+      `Created by: ${c.actor}\n\n— AssetFlow Directory`,
+    sms: `AssetFlow: account created for ${c.name} (${c.role}) by ${c.actor}`
+  }),
+
+  'user.role_changed': (c) => ({
+    type: 'warning',
+    subject: `Role change: ${c.name} is now ${c.newRole}`,
+    inApp: `${c.actor} changed ${c.name}'s role from ${c.previousRole} to ${c.newRole}`,
+    email:
+      `A user's role has changed. Roles grant permissions, so this is worth reviewing.\n\n` +
+      `User:       ${c.name} (${c.username})\n` +
+      `Previously: ${c.previousRole}\n` +
+      `Now:        ${c.newRole}\n` +
+      `Changed by: ${c.actor}\n\n— AssetFlow Directory`,
+    sms: `AssetFlow: ${c.name} role ${c.previousRole} -> ${c.newRole} (by ${c.actor})`
+  }),
+
+  'user.deleted': (c) => ({
+    type: 'warning',
+    subject: `Account removed: ${c.name}`,
+    inApp: `${c.actor} removed the account for ${c.name} (${c.role})`,
+    email:
+      `A user account has been removed. Any assets they held are now unassigned.\n\n` +
+      `Name:       ${c.name}\n` +
+      `Username:   ${c.username}\n` +
+      `Role:       ${c.role}\n` +
+      `Removed by: ${c.actor}\n\n— AssetFlow Directory`,
+    sms: `AssetFlow: account ${c.username} removed by ${c.actor}`
+  }),
+
+  /* ----------------------------------------------------------- security */
+
+  'security.password_changed': (c) => ({
+    type: 'warning',
+    subject: `Password changed for ${c.username}`,
+    inApp: `Password changed for ${c.username}`,
+    email:
+      `The password for an account has been changed.\n\n` +
+      `Account: ${c.username}\n` +
+      `When:    ${c.at}\n\n` +
+      `If this was not expected, treat the account as compromised and reset it.\n\n— AssetFlow Security`,
+    sms: `AssetFlow: password changed for ${c.username}`
+  }),
+
+  'security.permissions_changed': (c) => ({
+    type: 'error',
+    subject: `Role permissions changed by ${c.actor}`,
+    inApp: `${c.actor} changed role permissions: ${c.summary}`,
+    email:
+      `Role permissions have been changed. This alters what every user of those roles ` +
+      `can do.\n\n` +
+      `Changed by: ${c.actor}\n` +
+      `Roles:      ${c.summary}\n\n— AssetFlow Security`,
+    sms: `AssetFlow: role permissions changed by ${c.actor} (${c.summary})`
+  }),
+
+  /* ------------------------------------------------------------- system */
+
+  'system.bulk_import_completed': (c) => ({
+    type: c.failed > 0 ? 'warning' : 'info',
+    subject: `Bulk ${c.kind} import finished: ${c.success} of ${c.total}`,
+    inApp: `Bulk ${c.kind} import: ${c.success} imported, ${c.failed} failed, ${c.duplicate} duplicate`,
+    email:
+      `A bulk ${c.kind} import has finished.\n\n` +
+      `Total rows: ${c.total}\n` +
+      `Imported:   ${c.success}\n` +
+      `Failed:     ${c.failed}\n` +
+      `Duplicate:  ${c.duplicate}\n` +
+      `Run by:     ${c.actor}\n\n— AssetFlow`,
+    sms: `AssetFlow: ${c.kind} import done - ${c.success}/${c.total} ok, ${c.failed} failed`
   })
 };
 

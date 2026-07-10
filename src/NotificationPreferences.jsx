@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Save, RotateCcw, SlidersHorizontal } from 'lucide-react';
+import { Save, RotateCcw, SlidersHorizontal, X } from 'lucide-react';
 import { api } from './api';
 import Checkbox from './Checkbox';
 import AsyncBoundary from './AsyncBoundary';
@@ -33,7 +33,11 @@ const hasPriority = (eventType) => eventType.startsWith('ticket.');
 const GROUPS = [
   { prefix: 'ticket.', label: 'Ticket events' },
   { prefix: 'asset.', label: 'Asset events' },
-  { prefix: 'amc.', label: 'AMC events' }
+  { prefix: 'amc.', label: 'AMC events' },
+  { prefix: 'finance.', label: 'Finance events' },
+  { prefix: 'user.', label: 'User & account events' },
+  { prefix: 'security.', label: 'Security alerts' },
+  { prefix: 'system.', label: 'System alerts' }
 ];
 
 const prettyEvent = (eventType) =>
@@ -122,6 +126,27 @@ const NotificationPreferences = ({ addToast, currentRole }) => {
     });
     setDirty(true);
   };
+
+  const addUser = (event, userId) => {
+    if (!userId) return;
+    setRecipients((prev) => {
+      const idSet = new Set(prev[event].userIds);
+      idSet.add(Number(userId));
+      return { ...prev, [event]: { ...prev[event], userIds: idSet } };
+    });
+    setDirty(true);
+  };
+
+  const removeUser = (event, userId) => {
+    setRecipients((prev) => {
+      const idSet = new Set(prev[event].userIds);
+      idSet.delete(userId);
+      return { ...prev, [event]: { ...prev[event], userIds: idSet } };
+    });
+    setDirty(true);
+  };
+
+  const userById = (id) => users.find((u) => u.id === id);
 
   const save = async () => {
     if (saving) return;
@@ -252,6 +277,46 @@ const NotificationPreferences = ({ addToast, currentRole }) => {
                                 </button>
                               );
                             })}
+                            {[...(recipients[event]?.userIds || [])].map((uid) => {
+                              const u = userById(uid);
+                              return (
+                                <button
+                                  key={`u-${uid}`}
+                                  type="button"
+                                  className="badge"
+                                  onClick={() => isSuperAdmin && removeUser(event, uid)}
+                                  disabled={!isSuperAdmin}
+                                  title={isSuperAdmin ? 'Remove this person' : undefined}
+                                  style={{
+                                    cursor: isSuperAdmin ? 'pointer' : 'default',
+                                    background: 'var(--status-available-bg)',
+                                    color: 'var(--status-available)',
+                                    borderColor: 'var(--status-available)'
+                                  }}
+                                >
+                                  {u ? (u.name || u.username) : `User #${uid}`}
+                                  {isSuperAdmin && <X size={11} style={{ marginLeft: 4 }} />}
+                                </button>
+                              );
+                            })}
+
+                            {isSuperAdmin && (
+                              <select
+                                className="form-input form-input-sm"
+                                style={{ width: '150px' }}
+                                value=""
+                                onChange={(e) => { addUser(event, e.target.value); e.target.value = ''; }}
+                                aria-label={`Add an individual recipient for ${prettyEvent(event)}`}
+                              >
+                                <option value="">Add person…</option>
+                                {users
+                                  .filter((u) => !recipients[event]?.userIds.has(u.id))
+                                  .map((u) => (
+                                    <option key={u.id} value={u.id}>{u.name || u.username} ({u.role})</option>
+                                  ))}
+                              </select>
+                            )}
+
                             {recipients[event]?.roles.size === 0 && recipients[event]?.userIds.size === 0 && (
                               <span style={{ color: 'var(--text-muted)', fontSize: '11.5px' }}>Default recipients</span>
                             )}
