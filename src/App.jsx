@@ -47,6 +47,8 @@ import { mockAuthService } from './auth'
 import LoginView from './LoginView'
 import CustomSelect from './CustomSelect'
 import RelativeTime from './RelativeTime'
+import { can as canPerm, canLegacy, roleLabel, ROLE_OPTIONS } from './permissions'
+import RolePermissionMatrix from './RolePermissionMatrix'
 import AsyncBoundary from './AsyncBoundary'
 import { STATUS } from './asyncStatus'
 import { PageSkeleton } from './Skeleton'
@@ -90,7 +92,6 @@ const validateAndFormatPhone = (phone) => {
   return { isValid: false, error: 'Invalid phone format. Indian numbers require 10 digits. International numbers must start with +.' };
 };
 
-const USER_ROLE_OPTIONS = ['Super Admin', 'IT Admin', 'Facility Admin', 'Auditor', 'Employee'];
 
 const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImportClick, addToast, onUsersDeleted, departments = [] }) => {
   const [formUsername, setFormUsername] = useState('');
@@ -599,7 +600,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
                 {showBulkRole && (
                   <div className="card" style={{ position: 'absolute', bottom: '100%', left: 0, zIndex: 10, padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px', width: '180px', marginBottom: '4px' }}>
                     <CustomSelect 
-                      options={['Super Admin', 'IT Admin', 'Facility Admin', 'Finance Team', 'Employee', 'Auditor'].map(r => ({ value: r, label: r }))} 
+                      options={ROLE_OPTIONS} 
                       value={bulkRoleValue} 
                       onChange={e => setBulkRoleValue(e.target.value)}
                     />
@@ -814,7 +815,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
                 <div className="form-group">
                   <label className="form-label">Role</label>
                   <CustomSelect
-                    options={['Super Admin', 'IT Admin', 'Facility Admin', 'Finance Team', 'Employee', 'Auditor'].map(r => ({ value: r, label: r }))}
+                    options={ROLE_OPTIONS}
                     value={formRole}
                     onChange={e => setFormRole(e.target.value)}
                     disabled={isSubmitting}
@@ -884,7 +885,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
                   <div className="form-group">
                     <label className="form-label">Role</label>
                     <CustomSelect
-                      options={['Super Admin', 'IT Admin', 'Facility Admin', 'Finance Team', 'Employee', 'Auditor'].map(r => ({ value: r, label: r }))}
+                      options={ROLE_OPTIONS}
                       value={editFormRole}
                       onChange={e => setEditFormRole(e.target.value)}
                     />
@@ -925,149 +926,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
 // ─── Default role permission matrix ───────────────────────────────────────────
 // Keys match the action strings used in hasPermission().
 // 'Super Admin' is always full-access and cannot be edited.
-const DEFAULT_ROLE_PERMISSIONS = {
-  'IT Admin':       { view: true,  write: true,  allocate: true,  delete: true,  finance: false, viewReports: true,  viewAMC: true,  viewFinance: false, viewDocuments: true  },
-  'Facility Admin': { view: true,  write: true,  allocate: true,  delete: true,  finance: false, viewReports: true,  viewAMC: true,  viewFinance: false, viewDocuments: true  },
-  'Finance Team':   { view: true,  write: false, allocate: false, delete: false, finance: true,  viewReports: true,  viewAMC: true,  viewFinance: true,  viewDocuments: true  },
-  'Auditor':        { view: true,  write: false, allocate: false, delete: false, finance: false, viewReports: true,  viewAMC: true,  viewFinance: true,  viewDocuments: true  },
-  'Employee':       { view: true,  write: false, allocate: false, delete: false, finance: false, viewReports: false, viewAMC: false, viewFinance: false, viewDocuments: false },
-};
-
-const PERMISSION_LABELS = [
-  { key: 'view',          label: 'View Assets',        description: 'Can browse the asset list' },
-  { key: 'write',         label: 'Add / Edit Assets',  description: 'Can register and modify assets' },
-  { key: 'allocate',      label: 'Allocate Assets',    description: 'Can assign assets to employees' },
-  { key: 'delete',        label: 'Delete Assets',      description: 'Can permanently remove assets' },
-  { key: 'finance',       label: 'Finance Actions',    description: 'Can manage invoices and payments' },
-  { key: 'viewReports',   label: 'View Reports',       description: 'Can access Reports & Logs tab' },
-  { key: 'viewAMC',       label: 'View AMC',           description: 'Can access AMC Contracts tab' },
-  { key: 'viewFinance',   label: 'View Finance Tab',   description: 'Can access Finance tab' },
-  { key: 'viewDocuments', label: 'View Documents',     description: 'Can access the Document Repository' },
-];
-
-const EDITABLE_ROLES = ['IT Admin', 'Facility Admin', 'Finance Team', 'Auditor', 'Employee'];
-
-const RolePermissionsPage = ({ rolePermissions, setRolePermissions, isApiConnected, addToast }) => {
-  const [saving, setSaving] = useState(false);
-
-  // Persist to the database. The matrix is authoritative server-side, so a toggle is
-  // written through immediately; the UI updates optimistically and reverts on failure.
-  const persist = async (updates, nextMatrix) => {
-    const previous = rolePermissions;
-    setRolePermissions(nextMatrix);
-    if (!isApiConnected) return;
-    setSaving(true);
-    try {
-      const saved = await api.updateRolePermissions(updates);
-      if (saved && typeof saved === 'object') setRolePermissions(saved);
-    } catch (err) {
-      setRolePermissions(previous);
-      addToast?.('Save failed', err.message || 'Could not update role permissions.', 'error');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const toggle = (role, key) => {
-    const next = !rolePermissions[role][key];
-    persist(
-      { [role]: { [key]: next } },
-      { ...rolePermissions, [role]: { ...rolePermissions[role], [key]: next } }
-    );
-  };
-
-  const resetToDefault = () => {
-    // Send the full default for every editable role.
-    const updates = {};
-    for (const role of EDITABLE_ROLES) updates[role] = DEFAULT_ROLE_PERMISSIONS[role];
-    persist(updates, { ...DEFAULT_ROLE_PERMISSIONS });
-  };
-
-  return (
-    <div>
-      <div className="page-header" style={{ marginBottom: '20px' }}>
-        <div className="page-title-section">
-          <h2 className="page-title">Role Permissions</h2>
-          <p className="page-subtitle">Toggle access rights for each system role. Super Admin always has full access.</p>
-        </div>
-        <div className="page-actions">
-          <button className="btn btn-secondary" onClick={resetToDefault}>
-            Reset to Defaults
-          </button>
-        </div>
-      </div>
-
-      <div style={{ overflowX: 'auto' }}>
-        <table className="data-table" style={{ minWidth: '780px' }}>
-          <thead>
-            <tr>
-              <th style={{ width: '200px' }}>Permission</th>
-              <th style={{ textAlign: 'center', color: 'var(--color-muted)', fontSize: '12px' }}>Description</th>
-              {EDITABLE_ROLES.map(role => (
-                <th key={role} style={{ textAlign: 'center', whiteSpace: 'nowrap', width: '110px' }}>
-                  <span style={{ fontSize: '12px' }}>{role}</span>
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {PERMISSION_LABELS.map(({ key, label, description }) => (
-              <tr key={key}>
-                <td style={{ fontWeight: 600, fontSize: '13px' }}>{label}</td>
-                <td style={{ fontSize: '12px', color: 'var(--color-muted)' }}>{description}</td>
-                {EDITABLE_ROLES.map(role => {
-                  const granted = rolePermissions[role]?.[key] ?? false;
-                  return (
-                    <td key={role} style={{ textAlign: 'center' }}>
-                      <button
-                        onClick={() => toggle(role, key)}
-                        title={granted ? 'Click to revoke' : 'Click to grant'}
-                        style={{
-                          width: '36px', height: '20px',
-                          borderRadius: '10px',
-                          border: 'none',
-                          cursor: 'pointer',
-                          position: 'relative',
-                          background: granted ? 'var(--primary)' : 'var(--border-color)',
-                          transition: 'background 0.2s ease',
-                          flexShrink: 0,
-                          display: 'inline-block'
-                        }}
-                        aria-label={`${granted ? 'Revoke' : 'Grant'} ${label} for ${role}`}
-                      >
-                        <span style={{
-                          position: 'absolute',
-                          top: '2px',
-                          left: granted ? '18px' : '2px',
-                          width: '16px', height: '16px',
-                          borderRadius: '50%',
-                          background: '#fff',
-                          transition: 'left 0.2s ease',
-                          boxShadow: '0 1px 3px rgba(0,0,0,0.3)'
-                        }} />
-                      </button>
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Legend */}
-      <div style={{ marginTop: '20px', padding: '16px', background: 'var(--bg-sidebar)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
-        <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)' }}>
-          <strong style={{ color: 'var(--text-primary)' }}>Note:</strong> Changes take effect immediately for all active sessions. 
-          Super Admin always retains full access regardless of these settings.
-          IT Admin and Facility Admin permissions apply only to their respective asset categories (IT / Office).
-        </p>
-      </div>
-    </div>
-  );
-};
-
-const UserManagementPage = ({ usersList, setUsersList, isApiConnected, rolePermissions, setRolePermissions, onBulkImportClick, addToast, onUsersDeleted, currentRole, departments = [] }) => {
+const UserManagementPage = ({ usersList, setUsersList, isApiConnected, rolePermissions, setRolePermissions, permModel, onBulkImportClick, addToast, onUsersDeleted, currentRole, departments = [] }) => {
   const [usersSubTab, setUsersSubTab] = useState('directory');
   return (
     <div>
@@ -1106,11 +965,13 @@ const UserManagementPage = ({ usersList, setUsersList, isApiConnected, rolePermi
         />
       )}
       {usersSubTab === 'permissions' && (
-        <RolePermissionsPage
-          rolePermissions={rolePermissions}
-          setRolePermissions={setRolePermissions}
-          isApiConnected={isApiConnected}
+        <RolePermissionMatrix
+          modules={permModel?.modules || []}
+          verbLabels={permModel?.verbLabels || {}}
+          matrix={rolePermissions}
+          setMatrix={setRolePermissions}
           addToast={addToast}
+          currentRole={currentRole}
         />
       )}
     </div>
@@ -1247,7 +1108,9 @@ function App() {
   const [usersList, setUsersList] = useState([]);
   // The authoritative matrix is fetched from /api/role-permissions on load; these
   // defaults (identical to the DB seed) only gate the UI during that first request.
-  const [rolePermissions, setRolePermissions] = useState(DEFAULT_ROLE_PERMISSIONS);
+  const [rolePermissions, setRolePermissions] = useState({});
+  // The permission vocabulary (modules, verbs, role labels) shipped by the API.
+  const [permModel, setPermModel] = useState({ modules: [], roles: [], verbLabels: {} });
   const [assignments, setAssignments] = useState([]);
   const [departments, setDepartments] = useState(['IT', 'HR', 'Finance', 'Operations', 'Administration']);
 
@@ -1357,7 +1220,19 @@ function App() {
             api.getDepartments().catch(() => null)
           ]);
           if (cancelled) return;
-          if (dbRolePerms && typeof dbRolePerms === 'object') setRolePermissions(dbRolePerms);
+          if (dbRolePerms && typeof dbRolePerms === 'object') {
+            // The API now returns { modules, roles, verbLabels, matrix }; older
+            // shapes (a bare matrix) are tolerated so a stale server still works.
+            const matrix = dbRolePerms.matrix || dbRolePerms;
+            setRolePermissions(matrix);
+            if (dbRolePerms.modules) {
+              setPermModel({
+                modules: dbRolePerms.modules,
+                roles: dbRolePerms.roles || [],
+                verbLabels: dbRolePerms.verbLabels || {}
+              });
+            }
+          }
           if (Array.isArray(dbDepartments) && dbDepartments.length) setDepartments(dbDepartments);
 
           // Promise.all above rejects if any fetch fails, so reaching this point
@@ -1792,21 +1667,30 @@ function App() {
   };
 
   // Role Permissions Helper — reads from the live `rolePermissions` config
+  // Granular gate against the module -> verb matrix. Use this for new code and for
+  // gating menus, pages and buttons. Mirrors backend permissionModel.can.
+  const can = (moduleKey, verb) => canPerm(rolePermissions, currentRole, moduleKey, verb);
+
+  // Which permission module the current page belongs to (null = ungated page like
+  // the profile). Used to block direct hash navigation to a module the role cannot
+  // view, not just to hide its nav item.
+  const NAV_TO_MODULE = {
+    dashboard: 'dashboard', assets: 'assets', allocations: 'allocations', amc: 'amc',
+    finance: 'finance', documents: 'documents', qr_lookup: 'qr', reports: 'reports',
+    emails: 'emails', tickets: 'tickets', knowledge_base: 'knowledge', users: 'userDirectory'
+  };
+  const activeModule = NAV_TO_MODULE[activeTab] || null;
+  const activePageDenied = activeModule && !can(activeModule, 'view');
+
+  // Legacy shim: the many existing hasPermission('write' | 'viewDocuments' | ...) call
+  // sites resolve through the matrix via the flat-key map, so they keep working while
+  // the app migrates to can(). Asset-category scoping is preserved (a Pass-2 item to
+  // move into the data layer rather than a role string).
   const hasPermission = (action, assetCategory = null) => {
-    // Super Admin always has full access
     if (currentRole === 'Super Admin') return true;
-
-    const perms = rolePermissions[currentRole];
-    if (!perms) return false;
-
-    // Category scoping still applies for IT Admin and Facility Admin
     if (currentRole === 'IT Admin' && assetCategory && assetCategory !== 'IT') return false;
     if (currentRole === 'Facility Admin' && assetCategory && assetCategory !== 'Office') return false;
-
-    // Direct lookup from the permission matrix
-    if (action in perms) return !!perms[action];
-
-    return false;
+    return canLegacy(rolePermissions, currentRole, action);
   };
 
   // Auto notification triggers (Warranties / AMC expirations etc.) on mount
@@ -3546,72 +3430,86 @@ function App() {
         </div>
 
         <nav className="nav-links">
-          <button onClick={() => navigate('dashboard')} className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}>
-            <LayoutDashboard className="nav-icon" />
-            Dashboard
-          </button>
-          
-          <button onClick={() => navigate('assets')} className={`nav-item ${activeTab === 'assets' ? 'active' : ''}`}>
-            <Package className="nav-icon" />
-            Asset Directory
-          </button>
+          {/* Every nav item is gated by that module's view permission. The matrix,
+              not a hardcoded role string, decides what a role sees. */}
+          {can('dashboard', 'view') && (
+            <button onClick={() => navigate('dashboard')} className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}>
+              <LayoutDashboard className="nav-icon" />
+              Dashboard
+            </button>
+          )}
 
-          {currentRole !== 'Employee' && (
+          {can('assets', 'view') && (
+            <button onClick={() => navigate('assets')} className={`nav-item ${activeTab === 'assets' ? 'active' : ''}`}>
+              <Package className="nav-icon" />
+              Asset Directory
+            </button>
+          )}
+
+          {can('allocations', 'view') && (
             <button onClick={() => navigate('allocations')} className={`nav-item ${activeTab === 'allocations' ? 'active' : ''}`}>
               <UserCheck className="nav-icon" />
               Allocations & Movements
             </button>
           )}
 
-          {currentRole !== 'Employee' && (
+          {can('amc', 'view') && (
             <button onClick={() => navigate('amc')} className={`nav-item ${activeTab === 'amc' ? 'active' : ''}`}>
               <RefreshCw className="nav-icon" />
               AMC Contracts
             </button>
           )}
 
-          {currentRole !== 'Employee' && (
+          {can('finance', 'view') && (
             <button onClick={() => navigate('finance')} className={`nav-item ${activeTab === 'finance' ? 'active' : ''}`}>
               <FileText className="nav-icon" />
               Finance & Invoices
             </button>
           )}
 
-          {hasPermission('viewDocuments') && (
+          {can('documents', 'view') && (
             <button onClick={() => navigate('documents')} className={`nav-item ${activeTab === 'documents' ? 'active' : ''}`}>
               <FolderOpen className="nav-icon" />
               Document Repository
             </button>
           )}
 
-          <button onClick={() => navigate('qr_lookup')} className={`nav-item ${activeTab === 'qr_lookup' ? 'active' : ''}`}>
-            <QrCode className="nav-icon" />
-            QR Stickers & Scan
-          </button>
+          {can('qr', 'view') && (
+            <button onClick={() => navigate('qr_lookup')} className={`nav-item ${activeTab === 'qr_lookup' ? 'active' : ''}`}>
+              <QrCode className="nav-icon" />
+              QR Stickers & Scan
+            </button>
+          )}
 
-          {currentRole !== 'Employee' && (
+          {can('reports', 'view') && (
             <button onClick={() => navigate('reports')} className={`nav-item ${activeTab === 'reports' ? 'active' : ''}`}>
               <ClipboardList className="nav-icon" />
               Reports & Logs
             </button>
           )}
 
-          <button onClick={() => navigate('emails')} className={`nav-item ${activeTab === 'emails' ? 'active' : ''}`}>
-            <Mail className="nav-icon" />
-            Email Alerts Inbox
-          </button>
+          {can('emails', 'view') && (
+            <button onClick={() => navigate('emails')} className={`nav-item ${activeTab === 'emails' ? 'active' : ''}`}>
+              <Mail className="nav-icon" />
+              Email Alerts Inbox
+            </button>
+          )}
 
-          <button onClick={() => navigate('tickets')} className={`nav-item ${activeTab === 'tickets' ? 'active' : ''}`}>
-            <ClipboardList className="nav-icon" />
-            Support Tickets
-          </button>
+          {can('tickets', 'view') && (
+            <button onClick={() => navigate('tickets')} className={`nav-item ${activeTab === 'tickets' ? 'active' : ''}`}>
+              <ClipboardList className="nav-icon" />
+              Support Tickets
+            </button>
+          )}
 
-          <button onClick={() => navigate('knowledge_base')} className={`nav-item ${activeTab === 'knowledge_base' ? 'active' : ''}`}>
-            <BookOpen className="nav-icon" />
-            Knowledge Base
-          </button>
+          {can('knowledge', 'view') && (
+            <button onClick={() => navigate('knowledge_base')} className={`nav-item ${activeTab === 'knowledge_base' ? 'active' : ''}`}>
+              <BookOpen className="nav-icon" />
+              Knowledge Base
+            </button>
+          )}
 
-          {currentRole === 'Super Admin' && (
+          {can('userDirectory', 'view') && (
             <button onClick={() => navigate('users')} className={`nav-item ${activeTab === 'users' ? 'active' : ''}`}>
               <Users className="nav-icon" />
               User Directory
@@ -3789,6 +3687,19 @@ function App() {
               onRetry={retryInitialLoad}
               skeleton={<PageSkeleton />}
             >
+            {activePageDenied ? (
+              <div className="empty-state" role="alert" style={{ minHeight: '320px' }}>
+                <div className="empty-state-icon" style={{ color: 'var(--status-disposed)' }}>
+                  <AlertTriangle size={30} />
+                </div>
+                <div className="empty-state-title">Access restricted</div>
+                <div className="empty-state-desc">
+                  Your role ({roleLabel(currentRole)}) does not have permission to view this section.
+                  Contact a Super Administrator if you believe this is a mistake.
+                </div>
+              </div>
+            ) : (
+            <>
           
           {/* ==================== DASHBOARD PANEL ==================== */}
           {activeTab === 'dashboard' && (
@@ -5872,6 +5783,7 @@ function App() {
               isApiConnected={isApiConnected}
               rolePermissions={rolePermissions}
               setRolePermissions={setRolePermissions}
+              permModel={permModel}
               onBulkImportClick={() => setShowBulkImportEmployees(true)}
               addToast={addToast}
               onUsersDeleted={handleUsersDeleted}
@@ -5898,6 +5810,8 @@ function App() {
               addToast={addToast}
             />
           )}
+            </>
+            )}
             </AsyncBoundary>
             </motion.div>
           </AnimatePresence>

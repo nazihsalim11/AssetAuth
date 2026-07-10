@@ -38,7 +38,7 @@ const MODULES = [
   { key: 'reports',              label: 'Reports & Logs',         nav: 'reports',    verbs: ['view', 'export'] },
   { key: 'emails',               label: 'Email Alerts Inbox',     nav: 'emails',     verbs: ['view', 'manage'] },
   { key: 'tickets',              label: 'Support Tickets',        nav: 'tickets',    verbs: ['view', 'create', 'edit', 'delete', 'approve', 'export', 'manage'] },
-  { key: 'knowledge',            label: 'Knowledge Base',         nav: 'knowledge',  verbs: ['view', 'create', 'edit', 'delete'] },
+  { key: 'knowledge',            label: 'Knowledge Base',         nav: 'knowledge_base', verbs: ['view', 'create', 'edit', 'delete'] },
   { key: 'userDirectory',        label: 'User Directory',         nav: 'users',      verbs: ['view', 'export'] },
   { key: 'userManagement',       label: 'User Management',        nav: null,         verbs: ['view', 'create', 'edit', 'delete', 'manage'] },
   { key: 'departments',          label: 'Departments',            nav: null,         verbs: ['view', 'create', 'edit', 'delete'] },
