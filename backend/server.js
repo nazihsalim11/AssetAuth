@@ -3971,7 +3971,7 @@ if (INTERNAL_CRON_ENABLED) {
 // --- KNOWLEDGE BASE + HELPDESK OPTIONS ---
 // Registered before the catch-all so its routes are reachable.
 knowledgeBase.register(app, { requireUser });
-purchaseOrders.register(app, { requirePermission });
+purchaseOrders.register(app, { requirePermission, requireUser, roleCan });
 
 // --- 404 handler for unmatched API routes (JSON, not Express's default HTML page) ---
 app.use('/api', (req, res) => {

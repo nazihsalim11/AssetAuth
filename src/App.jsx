@@ -4674,6 +4674,7 @@ function App() {
               {financeSubTab === 'purchase_orders' && (
                 <PurchaseOrdersPage
                   canManage={can('finance', 'create')}
+                  can={can}
                   invoices={invoices}
                   amcs={amcs}
                   addToast={addToast}

@@ -209,6 +209,33 @@ export const api = {
   createPurchaseOrder: (po) => apiFetch('/purchase-orders', { method: 'POST', body: JSON.stringify(po) }),
   updatePurchaseOrder: (id, fields) => apiFetch(`/purchase-orders/${id}`, { method: 'PATCH', body: JSON.stringify(fields) }),
   deletePurchaseOrder: (id) => apiFetch(`/purchase-orders/${id}`, { method: 'DELETE' }),
+  getNextPoNumber: () => apiFetch('/purchase-orders/next-number'),
+  // The browser generates the PO PDF, uploads it via uploadFile(), then records the
+  // returned storage path here as the next version in the PO's document history.
+  recordPurchaseOrderDocument: (id, doc) => apiFetch(`/purchase-orders/${id}/documents`, { method: 'POST', body: JSON.stringify(doc) }),
+  getPurchaseOrderDocuments: (id) => apiFetch(`/purchase-orders/${id}/documents`),
+  emailPurchaseOrder: (id, payload) => apiFetch(`/purchase-orders/${id}/email`, { method: 'POST', body: JSON.stringify(payload) }),
+
+  // Vendor master. Selecting a vendor auto-fills a PO; the chosen values are then
+  // snapshotted onto the order server-side.
+  getVendors: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')
+    ).toString();
+    return apiFetch(`/vendors${qs ? `?${qs}` : ''}`);
+  },
+  getVendor: (id) => apiFetch(`/vendors/${id}`),
+  createVendor: (vendor) => apiFetch('/vendors', { method: 'POST', body: JSON.stringify(vendor) }),
+  updateVendor: (id, fields) => apiFetch(`/vendors/${id}`, { method: 'PATCH', body: JSON.stringify(fields) }),
+  deleteVendor: (id) => apiFetch(`/vendors/${id}`, { method: 'DELETE' }),
+
+  // Company letterhead, authorised signature and PO-number rule.
+  getPoSettings: () => apiFetch('/po-settings'),
+  updatePoSettings: (fields) => apiFetch('/po-settings', { method: 'PATCH', body: JSON.stringify(fields) }),
+
+  // Master Terms & Conditions. Saving publishes a new version; existing POs keep theirs.
+  getPoTerms: () => apiFetch('/po-terms'),
+  updatePoTerms: (content) => apiFetch('/po-terms', { method: 'PUT', body: JSON.stringify({ content }) }),
 
   // Notification administration. `channels` reports whether each provider is actually
   // configured, so the UI can explain why a channel is unavailable rather than just

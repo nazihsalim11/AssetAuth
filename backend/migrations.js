@@ -1,5 +1,6 @@
 const db = require('./db');
 const permissionModel = require('./permissionModel');
+const { DEFAULT_PO_TERMS } = require('./poDefaults');
 
 const runMigrations = async () => {
   console.log('Running database migrations...');
@@ -595,6 +596,143 @@ const runMigrations = async () => {
         [role.key, JSON.stringify(defaults[role.key])]
       );
     }
+
+    // 7i. Automated Purchase Order generation.
+    //
+    //   - vendors: the vendor master. Selecting one auto-fills a PO; the chosen values
+    //     are then snapshotted onto the PO itself (below) so later vendor edits never
+    //     rewrite an order that was already issued.
+    //   - purchase_orders gains the fields a formatted PO document needs, plus
+    //     server-computed totals and the amount-in-words. terms_content /
+    //     terms_version freeze the master Terms & Conditions used at generation time,
+    //     so an existing PO keeps its wording even after the master template changes.
+    //   - purchase_order_items: the line items the totals are derived from.
+    //   - po_settings: a single row holding company letterhead, authorised signature,
+    //     and the configurable PO-number rule (prefix / format / padding / running
+    //     sequence with optional yearly reset).
+    //   - po_terms: the append-only, centrally-managed master Terms & Conditions.
+    //     Editing inserts a new version rather than overwriting, which is what lets a
+    //     PO reference the exact version it was built from.
+    //   - purchase_order_documents: every generated PDF, versioned, for history.
+
+    await db.directQuery(`
+      CREATE TABLE IF NOT EXISTS vendors (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        address TEXT,
+        gst_vat VARCHAR(60),
+        contact_person VARCHAR(255),
+        email VARCHAR(255),
+        phone VARCHAR(60),
+        default_payment_terms VARCHAR(255),
+        default_currency VARCHAR(8) NOT NULL DEFAULT 'INR',
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_by VARCHAR(255),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS vendors_name_lower_idx ON vendors (LOWER(name));
+    `);
+
+    await db.directQuery(`
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS vendor_id INT REFERENCES vendors(id) ON DELETE SET NULL;
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS vendor_address TEXT;
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS vendor_gst VARCHAR(60);
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS vendor_contact_person VARCHAR(255);
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS vendor_email VARCHAR(255);
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS vendor_phone VARCHAR(60);
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS quotation_ref VARCHAR(120);
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS delivery_schedule VARCHAR(255);
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS payment_terms VARCHAR(255);
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS contact_person VARCHAR(255);
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS delivery_location TEXT;
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS subtotal DECIMAL(14, 2) NOT NULL DEFAULT 0.00;
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS tax_total DECIMAL(14, 2) NOT NULL DEFAULT 0.00;
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS discount_type VARCHAR(10) NOT NULL DEFAULT 'amount';
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS discount_value DECIMAL(14, 2) NOT NULL DEFAULT 0.00;
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS discount_amount DECIMAL(14, 2) NOT NULL DEFAULT 0.00;
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS amount_in_words TEXT;
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS terms_version INT;
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS terms_content TEXT;
+    `);
+
+    await db.directQuery(`
+      CREATE TABLE IF NOT EXISTS purchase_order_items (
+        id SERIAL PRIMARY KEY,
+        purchase_order_id INT NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+        line_no INT NOT NULL DEFAULT 1,
+        description TEXT NOT NULL,
+        hsn_code VARCHAR(40),
+        quantity DECIMAL(14, 2) NOT NULL DEFAULT 1,
+        unit VARCHAR(30) NOT NULL DEFAULT 'pcs',
+        unit_price DECIMAL(14, 2) NOT NULL DEFAULT 0.00,
+        tax_percent DECIMAL(6, 2) NOT NULL DEFAULT 0.00,
+        line_total DECIMAL(14, 2) NOT NULL DEFAULT 0.00
+      );
+      CREATE INDEX IF NOT EXISTS po_items_po_idx ON purchase_order_items (purchase_order_id);
+    `);
+
+    await db.directQuery(`
+      CREATE TABLE IF NOT EXISTS po_settings (
+        id INT PRIMARY KEY DEFAULT 1,
+        company_name VARCHAR(255) NOT NULL DEFAULT 'NPS Enterprise',
+        company_address TEXT,
+        company_gst VARCHAR(60),
+        company_email VARCHAR(255),
+        company_phone VARCHAR(60),
+        company_website VARCHAR(255),
+        logo_data_url TEXT,
+        signature_data_url TEXT,
+        signature_name VARCHAR(255),
+        signature_designation VARCHAR(255),
+        number_prefix VARCHAR(30) NOT NULL DEFAULT 'PO',
+        number_format VARCHAR(80) NOT NULL DEFAULT 'PO/{YYYY}/{SEQ}',
+        number_padding INT NOT NULL DEFAULT 6,
+        next_sequence INT NOT NULL DEFAULT 1,
+        reset_sequence_yearly BOOLEAN NOT NULL DEFAULT TRUE,
+        sequence_year INT,
+        default_currency VARCHAR(8) NOT NULL DEFAULT 'INR',
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT po_settings_singleton CHECK (id = 1)
+      );
+      INSERT INTO po_settings (id, company_address, company_email, sequence_year)
+        VALUES (1, '', '', EXTRACT(YEAR FROM CURRENT_DATE)::int)
+        ON CONFLICT (id) DO NOTHING;
+    `);
+
+    await db.directQuery(`
+      CREATE TABLE IF NOT EXISTS po_terms (
+        id SERIAL PRIMARY KEY,
+        version INT NOT NULL,
+        content TEXT NOT NULL,
+        updated_by VARCHAR(255),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS po_terms_version_idx ON po_terms (version);
+    `);
+
+    // Seed the first master Terms & Conditions version, once.
+    const termsCount = await db.directQuery('SELECT COUNT(*)::int AS c FROM po_terms');
+    if (termsCount.rows[0].c === 0) {
+      await db.directQuery(
+        `INSERT INTO po_terms (version, content, updated_by) VALUES (1, $1, 'System')`,
+        [DEFAULT_PO_TERMS]
+      );
+    }
+
+    await db.directQuery(`
+      CREATE TABLE IF NOT EXISTS purchase_order_documents (
+        id SERIAL PRIMARY KEY,
+        purchase_order_id INT NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+        version INT NOT NULL,
+        po_number VARCHAR(60),
+        file_path VARCHAR(255) NOT NULL,
+        file_name VARCHAR(255),
+        generated_by VARCHAR(255),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS po_documents_po_idx ON purchase_order_documents (purchase_order_id);
+    `);
 
     console.log('Database migrations completed successfully.');
   } catch (err) {
