@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Html5QrcodeScanner } from 'html5-qrcode'
@@ -54,6 +54,7 @@ import AsyncBoundary from './AsyncBoundary'
 import { STATUS } from './asyncStatus'
 import { PageSkeleton } from './Skeleton'
 import { useAnchoredOverlay } from './useAnchoredOverlay'
+import { useDismissableLayer } from './useDismissableLayer'
 import { lockBodyScroll, unlockBodyScroll } from './scrollLock'
 import { api } from './api'
 import BulkImportModal from './BulkImportModal'
@@ -1091,6 +1092,16 @@ const QRCodeSticker = ({ asset }) => {
   );
 };
 
+// Single source of truth for the hash routes an authenticated user can land on.
+// Both the initial-state resolver and the hashchange handler read this, so a new
+// tab can never be reachable on refresh yet silently ignored on in-app navigation
+// (which is exactly how the SLA tab regressed: it was missing from the handler's
+// copy of this list).
+const VALID_TABS = [
+  'dashboard', 'assets', 'allocations', 'amc', 'finance', 'documents',
+  'qr_lookup', 'reports', 'emails', 'users', 'tickets', 'sla', 'knowledge_base'
+];
+
 function App() {
   // Navigation & Auth States
   const [currentUser, setCurrentUser] = useState(() => mockAuthService.getCurrentSession());
@@ -1098,8 +1109,7 @@ function App() {
     const session = mockAuthService.getCurrentSession();
     if (!session) return 'login';
     const hash = window.location.hash.replace('#/', '');
-    const validTabs = ['dashboard', 'assets', 'allocations', 'amc', 'finance', 'documents', 'qr_lookup', 'reports', 'emails', 'tickets', 'sla', 'knowledge_base'];
-    return hash && validTabs.includes(hash) ? hash : 'dashboard';
+    return hash && VALID_TABS.includes(hash) ? hash : 'dashboard';
   });
   // Which sub-dashboard is shown on the Dashboard tab: assets (the ledger overview),
   // tickets, sla, or technicians.
@@ -1359,12 +1369,18 @@ function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const notifBellRef = useRef(null);
+  const notifPopoverRef = useRef(null);
   const notifPopoverStyle = useAnchoredOverlay(notifBellRef, showNotifications, {
     width: 340,
     align: 'end',
     gap: 10,
     maxHeight: 480
   });
+  // Close the popover on outside click / Escape, and dismiss it whenever another
+  // overlay (a dropdown, the bulk-action menu, …) opens. The bell itself is an
+  // anchor so clicking it to toggle closed is left to its own handler.
+  const closeNotifications = useCallback(() => setShowNotifications(false), []);
+  useDismissableLayer(showNotifications, closeNotifications, [notifBellRef, notifPopoverRef]);
   const [toasts, setToasts] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   
@@ -1576,8 +1592,7 @@ function App() {
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash.replace('#/', '');
-      const validTabs = ['dashboard', 'assets', 'allocations', 'amc', 'finance', 'documents', 'qr_lookup', 'reports', 'emails', 'users', 'tickets', 'knowledge_base'];
-      
+
       const session = mockAuthService.getCurrentSession();
       if (!session) {
         if (window.location.hash !== '#/login') {
@@ -1588,7 +1603,7 @@ function App() {
         if (hash === 'login' || !hash) {
           window.location.hash = '#/dashboard';
           setActiveTab('dashboard');
-        } else if (validTabs.includes(hash)) {
+        } else if (VALID_TABS.includes(hash)) {
           setActiveTab(hash);
         }
       }
@@ -3633,6 +3648,7 @@ function App() {
 
               {showNotifications && createPortal(
                 <div
+                  ref={notifPopoverRef}
                   className="notif-popover"
                   style={notifPopoverStyle || { position: 'fixed', visibility: 'hidden' }}
                 >

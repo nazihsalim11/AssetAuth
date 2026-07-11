@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown, Check } from 'lucide-react';
 import { useAnchoredOverlay } from './useAnchoredOverlay';
+import { useDismissableLayer } from './useDismissableLayer';
 
 // Reusable Custom Premium Dropdown Component
 const CustomSelect = ({
@@ -50,20 +51,12 @@ const CustomSelect = ({
     });
   };
 
-  React.useEffect(() => {
-    const handleClickOutside = (event) => {
-      // The menu is portaled to <body>, so it is not a DOM descendant of the
-      // container. Without checking it too, a mousedown on an option would count
-      // as "outside" and close the menu before the option's click handler ran.
-      const insideTrigger = containerRef.current && containerRef.current.contains(event.target);
-      const insideMenu = listRef.current && listRef.current.contains(event.target);
-      if (!insideTrigger && !insideMenu) {
-        setIsOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  // Outside-click / Escape dismissal, plus the single-open registry shared with
+  // every other overlay in the app. The menu is portaled to <body>, so listRef is
+  // passed alongside the container: without it a press on an option would count as
+  // "outside" and close the menu before the option's click handler ran.
+  const closeSelect = React.useCallback(() => setIsOpen(false), []);
+  useDismissableLayer(isOpen, closeSelect, [containerRef, listRef]);
 
   const handleKeyDown = (e) => {
     if (disabled) return;

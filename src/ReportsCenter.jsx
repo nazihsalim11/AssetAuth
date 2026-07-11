@@ -90,7 +90,7 @@ const exportPdf = (report) => {
 const FilterBar = ({ report, filters, setFilters, options }) => {
   if (!report) return null;
   const set = (patch) => setFilters((f) => ({ ...f, ...patch }));
-  const has = (k) => report.filters.includes(k);
+  const has = (k) => (report.filters || []).includes(k);
 
   // The status filter's options depend on the report.
   const statusOptions = report.key === 'purchase_orders' ? options.poStatuses
@@ -101,7 +101,7 @@ const FilterBar = ({ report, filters, setFilters, options }) => {
     <div className="form-group" style={{ margin: 0, minWidth: '160px' }}>
       <label className="form-label" style={{ fontSize: '11px' }}>{label}</label>
       <CustomSelect value={filters[k] || ''} onChange={(e) => set({ [k]: e.target.value })} searchable
-        options={[{ value: '', label: `All` }, ...opts.map((o) => ({ value: o, label: o }))]} />
+        options={[{ value: '', label: `All` }, ...(opts || []).map((o) => ({ value: o, label: o }))]} />
     </div>
   );
 
@@ -199,9 +199,15 @@ const ReportsCenter = ({ addToast, canExport = false }) => {
   const load = useCallback(async () => {
     try {
       const opt = await api.getReportOptions();
-      setOptions(opt);
-      if (opt.reports.length) setReportKey((k) => k || opt.reports[0].key);
-      setSchedules(await api.getScheduledReports());
+      // The API groups the filter value-lists under `filterOptions`, but this page
+      // reads them at the top level (`options.departments`, `options.categories`, …).
+      // Flatten the two shapes together — and default every list — so a filter whose
+      // options the backend omitted renders as an empty "All" select instead of
+      // throwing "Cannot read properties of undefined (reading 'map')".
+      const reports = opt?.reports || [];
+      setOptions({ ...(opt?.filterOptions || {}), ...opt, reports });
+      if (reports.length) setReportKey((k) => k || reports[0].key);
+      setSchedules((await api.getScheduledReports()) || []);
     } catch (err) {
       addToast('Load failed', err.message, 'error');
     }
@@ -218,7 +224,10 @@ const ReportsCenter = ({ addToast, canExport = false }) => {
     if (!reportKey) return;
     setRunning(true);
     try {
-      setReport(await api.runReport(reportKey, filters));
+      const result = await api.runReport(reportKey, filters);
+      // Guarantee the arrays the table/exports iterate over always exist, so a
+      // sparse response can never surface as a `.map` of undefined.
+      setReport({ ...result, columns: result?.columns || [], rows: result?.rows || [] });
     } catch (err) {
       addToast('Report failed', err.message, 'error');
     } finally {

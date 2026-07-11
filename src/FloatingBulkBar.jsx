@@ -1,8 +1,9 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import { X, ChevronUp } from 'lucide-react';
 import { useAnchoredOverlay } from './useAnchoredOverlay';
+import { useDismissableLayer } from './useDismissableLayer';
 
 /**
  * The floating toolbar every bulk-selection surface should use.
@@ -105,28 +106,12 @@ const FloatingBulkBar = ({
     if (!collapsed) setMenuOpen(false);
   }, [collapsed]);
 
-  useEffect(() => {
-    if (!menuOpen) return undefined;
-
-    const onPointerDown = (event) => {
-      // The panel is portaled to <body>, so it is not a DOM descendant of the
-      // trigger. Without checking it too, a click on an action would count as
-      // "outside" and close the menu before the action's handler ran.
-      const inTrigger = moreRef.current && moreRef.current.contains(event.target);
-      const inPanel = panelRef.current && panelRef.current.contains(event.target);
-      if (!inTrigger && !inPanel) setMenuOpen(false);
-    };
-    const onKeyDown = (event) => {
-      if (event.key === 'Escape') setMenuOpen(false);
-    };
-
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [menuOpen]);
+  // Outside-click / Escape dismissal + the shared single-open registry. The panel
+  // is portaled to <body>, so panelRef is passed alongside the trigger; without it
+  // a click on an action would count as "outside" and close the menu before the
+  // action's handler ran.
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
+  useDismissableLayer(menuOpen, closeMenu, [moreRef, panelRef]);
 
   return createPortal(
     <>
