@@ -1123,7 +1123,20 @@ const loadRolePermissions = async ({ fresh = false } = {}) => {
     return rolePermissionsCache;
   }
   const { rows } = await db.query('SELECT role, permissions FROM role_permissions');
-  rolePermissionsCache = Object.fromEntries(rows.map((r) => [r.role, r.permissions]));
+  const stored = Object.fromEntries(rows.map((r) => [r.role, r.permissions]));
+  // Layer stored edits on top of the code defaults so modules added after a role
+  // was last saved (e.g. sla/dashboard/reports) fall back to their default grants
+  // instead of being absent — an absent module reads as fully denied. Explicit
+  // stored verbs always win over the default; only never-saved modules use it.
+  const base = permissionModel.buildDefaultMatrix();
+  const merged = {};
+  for (const role of Object.keys(base)) {
+    merged[role] = {};
+    for (const mod of Object.keys(base[role])) {
+      merged[role][mod] = { ...base[role][mod], ...(stored[role]?.[mod] || {}) };
+    }
+  }
+  rolePermissionsCache = merged;
   rolePermissionsCachedAt = Date.now();
   return rolePermissionsCache;
 };
