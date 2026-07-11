@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { Clock, Zap, TrendingUp, AlertTriangle, Trophy } from 'lucide-react';
+import { TrendingUp, AlertTriangle, Trophy } from 'lucide-react';
 import { api } from './api';
 import { silk } from './engine/motion';
+import { SkeletonCards, Skeleton } from './Skeleton';
 
 /* ---------------------------------------------------------------- primitives */
 
@@ -228,16 +229,28 @@ const FETCHERS = {
   technicians: api.getTechnicianDashboard
 };
 
-const DashboardsPanel = ({ view, addToast }) => {
+// A section-sized skeleton, shaped like the dashboard it stands in for, so each
+// section on the unified page loads independently instead of blocking the page.
+const DashboardSkeleton = ({ view }) => (
+  <div role="status" aria-busy="true" aria-label="Loading dashboard" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+    <SkeletonCards count={view === 'sla' ? 5 : view === 'technicians' ? 3 : 6} />
+    {view === 'technicians'
+      ? <Skeleton style={{ height: '220px', borderRadius: 'var(--radius-lg)' }} />
+      : <Skeleton style={{ height: '200px', borderRadius: 'var(--radius-lg)' }} />}
+  </div>
+);
+
+// A titled section on the unified dashboard. Each instance owns one view and
+// fetches its own data, so sections stream in one at a time rather than making
+// the whole page wait on the slowest request.
+const DashboardsPanel = ({ view, title, subtitle, icon: Icon, addToast }) => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   // Which view the data in state actually belongs to. Each dashboard has a
   // different shape (only the SLA payload has `compliance`, only the technician
-  // one has `technicians`), and switching `view` re-renders with the *previous*
-  // view's data still in state for one tick before the new fetch resolves.
-  // Rendering e.g. SlaDash against ticket data threw "reading 'resolution'";
-  // gating on this makes that stale cross-shape render impossible.
+  // one has `technicians`); gating renders on this keeps a stale cross-shape
+  // render impossible even if `view` ever changes under a mounted panel.
   const [loadedView, setLoadedView] = useState(null);
 
   const load = useCallback(async () => {
@@ -258,16 +271,32 @@ const DashboardsPanel = ({ view, addToast }) => {
 
   useEffect(() => { load(); }, [load]);
 
-  if (error) return <div className="card" style={{ padding: '30px', textAlign: 'center', color: 'var(--status-disposed)' }}><AlertTriangle size={16} /> {error}</div>;
-  if (loading || !data || loadedView !== view) return <div className="card" style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading dashboard…</div>;
-
-  return (
-    <motion.div {...silk} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      {view === 'tickets' && <TicketDash data={data} />}
-      {view === 'sla' && <SlaDash data={data} />}
-      {view === 'technicians' && <TechDash data={data} />}
-    </motion.div>
+  const heading = title && (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '0 0 14px' }}>
+      {Icon && <Icon size={18} style={{ color: 'var(--primary)', flexShrink: 0 }} />}
+      <div>
+        <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0 }}>{title}</h2>
+        {subtitle && <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{subtitle}</span>}
+      </div>
+    </div>
   );
+
+  let body;
+  if (error) {
+    body = <div className="card" style={{ padding: '30px', textAlign: 'center', color: 'var(--status-disposed)' }}><AlertTriangle size={16} /> {error}</div>;
+  } else if (loading || !data || loadedView !== view) {
+    body = <DashboardSkeleton view={view} />;
+  } else {
+    body = (
+      <motion.div {...silk} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+        {view === 'tickets' && <TicketDash data={data} />}
+        {view === 'sla' && <SlaDash data={data} />}
+        {view === 'technicians' && <TechDash data={data} />}
+      </motion.div>
+    );
+  }
+
+  return <section>{heading}{body}</section>;
 };
 
 export default DashboardsPanel;

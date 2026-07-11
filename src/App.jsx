@@ -1111,9 +1111,6 @@ function App() {
     const hash = window.location.hash.replace('#/', '');
     return hash && VALID_TABS.includes(hash) ? hash : 'dashboard';
   });
-  // Which sub-dashboard is shown on the Dashboard tab: assets (the ledger overview),
-  // tickets, sla, or technicians.
-  const [dashboardView, setDashboardView] = useState('assets');
   const [currentRole, setCurrentRole] = useState(() => {
     const session = mockAuthService.getCurrentSession();
     return session ? session.role : 'Super Admin';
@@ -1170,6 +1167,7 @@ function App() {
   const [transferTargetType, setTransferTargetType] = useState('employee');
   const [transferEmployee, setTransferEmployee] = useState('');
   const [transferDepartment, setTransferDepartment] = useState('');
+  const [isTransferring, setIsTransferring] = useState(false);
   const [showEmployeeLookup, setShowEmployeeLookup] = useState(false);
   const [amcSearch, setAmcSearch] = useState('');
   const [selectedNotificationIds, setSelectedNotificationIds] = useState([]);
@@ -1435,6 +1433,7 @@ function App() {
   // transfer's custodian/department never leaks into the next one.
   React.useEffect(() => {
     if (transferModal) {
+      setTransferTargetType('employee');
       setTransferEmployee('');
       setTransferDepartment(transferModal.department || '');
     }
@@ -2037,6 +2036,9 @@ function App() {
   // Handle asset transfer
   const handleTransfer = async (e) => {
     e.preventDefault();
+    // Re-entry guard: a second submit (double click, Enter while the first is in
+    // flight) would double-write the movement. Bail before any work runs.
+    if (isTransferring) return;
     const data = new FormData(e.target);
     const assetId = transferModal.id;
     const target = data.get('targetType'); // employee or department
@@ -2075,52 +2077,59 @@ function App() {
       status: target === 'employee' ? 'Assigned' : 'Available'
     };
 
-    if (isApiConnected) {
-      try {
-        await api.updateAsset(assetId, updatedFields);
-      } catch (err) {
-        addToast("Transfer Failed", err.message || "Failed to transfer asset.", "error");
-        return;
+    // From here on the button shows a spinner and is disabled. The finally block
+    // clears it, so it re-enables on failure and after a successful close alike.
+    setIsTransferring(true);
+    try {
+      if (isApiConnected) {
+        try {
+          await api.updateAsset(assetId, updatedFields);
+        } catch (err) {
+          addToast("Transfer Failed", err.message || "Failed to transfer asset.", "error");
+          return;
+        }
       }
+
+      setAssets(prev => prev.map(a => {
+        if (a.id === assetId) {
+          return {
+            ...a,
+            ...updatedFields
+          };
+        }
+        return a;
+      }));
+
+      const destination = target === 'employee' ? `${newEmployee} (${newDept})` : `Dept: ${newDept} (${newLocation})`;
+      const source = prevEmployee ? `${prevEmployee} (${prevDept})` : `Dept: ${prevDept} (${prevLoc})`;
+
+      const newMvt = {
+        id: `MVT-${Date.now()}`,
+        assetId,
+        date,
+        type: "Transfer",
+        from: source,
+        to: destination,
+        actor: currentRole,
+        notes
+      };
+      setMovements(prev => [newMvt, ...prev]);
+      if (isApiConnected) {
+        try {
+          await api.createMovement(newMvt);
+        } catch (err) {
+          console.error("Failed to save movement to DB:", err);
+        }
+      }
+
+      await addAuditLog("Asset Transfer", `Transferred ${assetId} from ${source} to ${destination}`);
+      addToast("Asset Transferred", `Asset ${assetId} moved successfully.`, "success");
+      setTransferModal(null);
+      setTransferTargetType('employee');
+      setTransferEmployee('');
+    } finally {
+      setIsTransferring(false);
     }
-
-    setAssets(prev => prev.map(a => {
-      if (a.id === assetId) {
-        return {
-          ...a,
-          ...updatedFields
-        };
-      }
-      return a;
-    }));
-
-    const destination = target === 'employee' ? `${newEmployee} (${newDept})` : `Dept: ${newDept} (${newLocation})`;
-    const source = prevEmployee ? `${prevEmployee} (${prevDept})` : `Dept: ${prevDept} (${prevLoc})`;
-
-    const newMvt = {
-      id: `MVT-${Date.now()}`,
-      assetId,
-      date,
-      type: "Transfer",
-      from: source,
-      to: destination,
-      actor: currentRole,
-      notes
-    };
-    setMovements(prev => [newMvt, ...prev]);
-    if (isApiConnected) {
-      try {
-        await api.createMovement(newMvt);
-      } catch (err) {
-        console.error("Failed to save movement to DB:", err);
-      }
-    }
-
-    await addAuditLog("Asset Transfer", `Transferred ${assetId} from ${source} to ${destination}`);
-    addToast("Asset Transferred", `Asset ${assetId} moved successfully.`, "success");
-    setTransferModal(null);
-    setTransferTargetType('employee');
-    setTransferEmployee('');
   };
 
   // Handle return
@@ -3755,21 +3764,11 @@ function App() {
           
           {/* ==================== DASHBOARD PANEL ==================== */}
           {activeTab === 'dashboard' && (
-            <>
-              {/* Sub-dashboard selector: assets ledger, plus the live ticket / SLA /
-                  technician dashboards. */}
-              <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-sidebar)', padding: '4px', borderRadius: 'var(--radius-lg)', width: 'fit-content', border: '1px solid var(--border-color)', marginBottom: '20px', flexWrap: 'wrap' }}>
-                {[['assets', 'Assets'], ['tickets', 'Tickets'], ['sla', 'SLA'], ['technicians', 'Technicians']].map(([key, label]) => (
-                  <button key={key} onClick={() => setDashboardView(key)}
-                    className={`btn btn-sm ${dashboardView === key ? 'btn-primary' : 'btn-secondary'}`}
-                    style={{ border: 'none', background: dashboardView === key ? undefined : 'transparent' }}>
-                    {label}
-                  </button>
-                ))}
-              </div>
-
-              {dashboardView === 'assets' && (
-              <>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
+              {/* Unified dashboard: every section stacks on one scrollable page —
+                  no tabs. The asset overview leads, then the live ticket, SLA and
+                  technician dashboards, each streaming in independently. */}
+              <section>
               <div className="page-header">
                 <div className="page-title-section">
                   <span className="page-kicker">System Overview</span>
@@ -3918,13 +3917,12 @@ function App() {
                   </div>
                 </div>
               </div>
-              </>
-              )}
+              </section>
 
-              {dashboardView !== 'assets' && (
-                <DashboardsPanel view={dashboardView} addToast={addToast} />
-              )}
-            </>
+              <DashboardsPanel view="tickets" title="Ticket Operations" subtitle="Live queue health across all tickets" icon={ClipboardList} addToast={addToast} />
+              <DashboardsPanel view="sla" title="SLA Compliance" subtitle="Response and resolution against policy" icon={ShieldCheck} addToast={addToast} />
+              <DashboardsPanel view="technicians" title="Technician Performance" subtitle="Workload and throughput by agent" icon={Users} addToast={addToast} />
+            </div>
           )}
 
           {/* ==================== ASSET INVENTORY ==================== */}
@@ -6233,8 +6231,20 @@ function App() {
           maxWidth="480px"
           footer={
             <>
-              <button type="button" className="btn btn-secondary" onClick={() => setTransferModal(null)}>Cancel</button>
-              <button type="submit" className="btn btn-primary">Authorize Transfer</button>
+              <button type="button" className="btn btn-secondary" onClick={() => setTransferModal(null)} disabled={isTransferring}>Cancel</button>
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={isTransferring}
+                style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+              >
+                {isTransferring ? (
+                  <>
+                    <RefreshCw size={14} className="animate-spin" />
+                    Authorizing Transfer…
+                  </>
+                ) : 'Authorize Transfer'}
+              </button>
 
             </>
           }
@@ -6253,7 +6263,23 @@ function App() {
                       { value: "department", label: "Back to Department Inventory" }
                     ]}
                     value={transferTargetType}
-                    onChange={(e) => setTransferTargetType(e.target.value)}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setTransferTargetType(next);
+                      // Changing the destination re-derives every dependent field
+                      // immediately so the form never carries stale values.
+                      if (next === 'department') {
+                        // Returning to inventory: land the asset back in its
+                        // home department by default (still editable below).
+                        setTransferEmployee('');
+                        setTransferDepartment(transferModal.department || '');
+                      } else {
+                        // Moving to a custodian: department follows the chosen
+                        // employee, or clears until one is picked.
+                        const match = findEmployeeByName(transferEmployee);
+                        setTransferDepartment(match?.department || '');
+                      }
+                    }}
                     required
                   />
                 </div>
@@ -6294,6 +6320,11 @@ function App() {
                   {transferTargetType === 'employee' && findEmployeeByName(transferEmployee)?.department && (
                     <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                       Auto-filled from {transferEmployee}. You can still override it.
+                    </span>
+                  )}
+                  {transferTargetType === 'department' && (
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      Auto-filled from the asset's home department. You can still override it.
                     </span>
                   )}
                 </div>
