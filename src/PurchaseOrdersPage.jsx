@@ -8,6 +8,7 @@ import {
 import { api } from './api';
 import { openStoredFile } from './files';
 import Modal from './Modal';
+import { SpinnerButton } from './SpinnerButton';
 import { downloadPoPdf, previewPoPdf, printPoPdf, poPdfFile } from './poPdf';
 
 const STATUS_BADGE = {
@@ -493,7 +494,7 @@ const VendorsView = ({ canManage, currencies, addToast }) => {
                   <div className="table-actions">
                     {canManage && <>
                       <button className="btn-table-action" title="Edit" onClick={() => setEditing(v)}><Edit2 size={15} /></button>
-                      <button className="btn-table-action delete" title="Delete" onClick={() => remove(v)}><Trash2 size={15} /></button>
+                      <SpinnerButton className="btn-table-action delete" title="Delete" onClick={() => remove(v)} icon={Trash2} spinnerSize={15} />
                     </>}
                   </div>
                 </td>
@@ -992,7 +993,7 @@ const PurchaseOrdersPage = ({ canManage = false, can, invoices = [], amcs = [], 
                     <td onClick={(e) => e.stopPropagation()}>
                       <div className="table-actions">
                         {canEdit && <button className="btn-table-action" title="Edit" onClick={async () => setEditing(await api.getPurchaseOrder(po.id))}><Edit2 size={15} /></button>}
-                        {canDelete && <button className="btn-table-action delete" title="Delete" onClick={() => remove(po)}><Trash2 size={15} /></button>}
+                        {canDelete && <SpinnerButton className="btn-table-action delete" title="Delete" onClick={() => remove(po)} icon={Trash2} spinnerSize={15} />}
                       </div>
                     </td>
                   </tr>

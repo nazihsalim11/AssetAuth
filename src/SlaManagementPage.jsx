@@ -7,6 +7,7 @@ import {
 import { api } from './api';
 import Modal from './Modal';
 import CustomSelect from './CustomSelect';
+import { SpinnerButton } from './SpinnerButton';
 import { silk } from './engine/motion';
 
 /* --------------------------------------------------------------- helpers */
@@ -110,8 +111,8 @@ const PolicyEditor = ({ policy, calendars, options, onSave, onCancel, addToast }
       subtitle="Match rules decide which tickets this policy governs; the most specific match wins."
       footer={
         <>
-          <button type="button" className="btn btn-secondary" onClick={onCancel}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : 'Save Policy'}</button>
+          <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={saving}>Cancel</button>
+          <SpinnerButton type="submit" className="btn btn-primary" loading={saving} loadingText="Saving…">Save Policy</SpinnerButton>
         </>
       }
     >
@@ -275,8 +276,8 @@ const CalendarEditor = ({ calendar, options, onSave, onCancel, addToast }) => {
       subtitle="SLA timers only advance during the working hours defined here."
       footer={
         <>
-          <button type="button" className="btn btn-secondary" onClick={onCancel}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : 'Save Calendar'}</button>
+          <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={saving}>Cancel</button>
+          <SpinnerButton type="submit" className="btn btn-primary" loading={saving} loadingText="Saving…">Save Calendar</SpinnerButton>
         </>
       }
     >
@@ -576,10 +577,8 @@ const SlaManagementPage = ({ addToast, canEdit = false }) => {
                   {canEdit && (
                     <div style={{ display: 'flex', gap: '6px' }}>
                       <button className="btn btn-secondary btn-sm" onClick={() => setEditingPolicy(p)} aria-label="Edit"><Edit2 size={13} /></button>
-                      <button className="btn btn-secondary btn-sm" onClick={() => archivePolicy(p, !p.archived)} aria-label={p.archived ? 'Restore' : 'Archive'}>
-                        {p.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
-                      </button>
-                      <button className="btn btn-danger btn-sm" onClick={() => deletePolicy(p)} aria-label="Delete"><Trash2 size={13} /></button>
+                      <SpinnerButton className="btn btn-secondary btn-sm" onClick={() => archivePolicy(p, !p.archived)} icon={p.archived ? ArchiveRestore : Archive} spinnerSize={13} aria-label={p.archived ? 'Restore' : 'Archive'} />
+                      <SpinnerButton className="btn btn-danger btn-sm" onClick={() => deletePolicy(p)} icon={Trash2} spinnerSize={13} aria-label="Delete" />
                     </div>
                   )}
                 </div>
@@ -613,7 +612,7 @@ const SlaManagementPage = ({ addToast, canEdit = false }) => {
                 {canEdit && (
                   <div style={{ display: 'flex', gap: '6px' }}>
                     <button className="btn btn-secondary btn-sm" onClick={() => setEditingCalendar(c)} aria-label="Edit"><Edit2 size={13} /></button>
-                    <button className="btn btn-danger btn-sm" onClick={() => deleteCalendar(c)} aria-label="Delete"><Trash2 size={13} /></button>
+                    <SpinnerButton className="btn btn-danger btn-sm" onClick={() => deleteCalendar(c)} icon={Trash2} spinnerSize={13} aria-label="Delete" />
                   </div>
                 )}
               </div>

@@ -53,6 +53,8 @@ import RolePermissionMatrix from './RolePermissionMatrix'
 import AsyncBoundary from './AsyncBoundary'
 import { STATUS } from './asyncStatus'
 import { PageSkeleton } from './Skeleton'
+import { SpinnerButton } from './SpinnerButton'
+import { useAsyncAction } from './useAsyncAction'
 import { useAnchoredOverlay } from './useAnchoredOverlay'
 import { useDismissableLayer } from './useDismissableLayer'
 import { lockBodyScroll, unlockBodyScroll } from './scrollLock'
@@ -322,10 +324,8 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
 
   const editUserFooter = (
     <>
-      <button type="button" className="btn btn-secondary" onClick={() => setEditingUser(null)}>Cancel</button>
-      <button type="submit" className="btn btn-primary" disabled={isUpdating}>
-        {isUpdating ? 'Saving…' : 'Save Changes'}
-      </button>
+      <button type="button" className="btn btn-secondary" onClick={() => setEditingUser(null)} disabled={isUpdating}>Cancel</button>
+      <SpinnerButton type="submit" className="btn btn-primary" loading={isUpdating} loadingText="Saving…">Save Changes</SpinnerButton>
     </>
   );
 
@@ -583,9 +583,9 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
             </span>
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
               {canManage && (<>
-              <button className="btn btn-secondary btn-sm" onClick={() => handleBulkStatusChange('Active')}>Activate</button>
-              <button className="btn btn-secondary btn-sm" onClick={() => handleBulkStatusChange('Inactive')}>Deactivate</button>
-              <button className="btn btn-secondary btn-sm" onClick={handleBulkResetPassword}>Reset Pass</button>
+              <SpinnerButton className="btn btn-secondary btn-sm" onClick={() => handleBulkStatusChange('Active')} loadingText="Working…">Activate</SpinnerButton>
+              <SpinnerButton className="btn btn-secondary btn-sm" onClick={() => handleBulkStatusChange('Inactive')} loadingText="Working…">Deactivate</SpinnerButton>
+              <SpinnerButton className="btn btn-secondary btn-sm" onClick={handleBulkResetPassword} loadingText="Resetting…">Reset Pass</SpinnerButton>
 
               {/* Bulk Dept */}
               <div style={{ position: 'relative', display: 'inline-block' }}>
@@ -597,7 +597,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
                       value={bulkDeptValue} 
                       onChange={e => setBulkDeptValue(e.target.value)}
                     />
-                    <button className="btn btn-primary btn-sm" onClick={handleBulkDeptChange}>Apply</button>
+                    <SpinnerButton className="btn btn-primary btn-sm" onClick={handleBulkDeptChange} loadingText="Applying…">Apply</SpinnerButton>
                   </div>
                 )}
               </div>
@@ -612,7 +612,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
                       value={bulkRoleValue} 
                       onChange={e => setBulkRoleValue(e.target.value)}
                     />
-                    <button className="btn btn-primary btn-sm" onClick={handleBulkRoleChange}>Apply</button>
+                    <SpinnerButton className="btn btn-primary btn-sm" onClick={handleBulkRoleChange} loadingText="Applying…">Apply</SpinnerButton>
                   </div>
                 )}
               </div>
@@ -620,7 +620,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
 
               <button className="btn btn-secondary btn-sm" onClick={handleExportSelected}>Export CSV</button>
               {canManage && (
-                <button className="btn btn-secondary btn-sm" style={{ color: 'var(--status-disposed)'}} onClick={handleBulkDelete}>Delete</button>
+                <SpinnerButton className="btn btn-secondary btn-sm" style={{ color: 'var(--status-disposed)'}} onClick={handleBulkDelete} loadingText="Deleting…">Delete</SpinnerButton>
               )}
             </div>
           </div>
@@ -693,9 +693,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
                         <button className="btn-table-action" onClick={() => handleEditUserClick(u)} title="Edit User">
                           <Edit2 size={13} />
                         </button>
-                        <button className="btn-table-action delete" onClick={() => handleDeleteUser(u)} title="Delete User">
-                          <Trash2 size={13} />
-                        </button>
+                        <SpinnerButton className="btn-table-action delete" onClick={() => handleDeleteUser(u)} icon={Trash2} spinnerSize={13} title="Delete User" />
                       </div>
                     ) : (
                       <span style={{ color: 'var(--text-muted)' }}>—</span>
@@ -769,9 +767,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
               <button type="button" className="btn btn-secondary" onClick={() => setShowRegisterModal(false)} disabled={isSubmitting}>
                 Cancel
               </button>
-              <button type="submit" className="btn btn-primary" disabled={isSubmitting}>
-                {isSubmitting ? 'Creating…' : 'Create User'}
-              </button>
+              <SpinnerButton type="submit" className="btn btn-primary" loading={isSubmitting} loadingText="Creating…">Create User</SpinnerButton>
             </>
           }
         >
@@ -1743,7 +1739,7 @@ function App() {
   // in the bell feed — so it has been removed. See getNotifications on load.
 
   // Handle asset addition
-  const handleAddAsset = async (e) => {
+  const [handleAddAsset, addingAsset] = useAsyncAction(async (e) => {
     e.preventDefault();
     const data = new FormData(e.target);
     const category = data.get('category');
@@ -1818,10 +1814,10 @@ function App() {
     setAddAssetModal(false);
     setAddAssetCategory('IT');
     setAddAssetInvoiceId('');
-  };
+  });
 
   // Handle asset edit
-  const handleEditAsset = async (e) => {
+  const [handleEditAsset, editingAsset] = useAsyncAction(async (e) => {
     e.preventDefault();
     const data = new FormData(e.target);
     const id = editAssetModal.id;
@@ -1884,7 +1880,7 @@ function App() {
     await addAuditLog("Asset Edit", `Updated asset details for ${id}`);
     addToast("Asset Updated", `Asset ${id} details updated.`, "success");
     setEditAssetModal(null);
-  };
+  });
 
   // Handle asset deletion
   const handleDeleteAsset = async (asset) => {
@@ -2093,7 +2089,7 @@ function App() {
   };
 
   // Handle return
-  const handleReturn = async (e) => {
+  const [handleReturn, returningAsset] = useAsyncAction(async (e) => {
     e.preventDefault();
     const data = new FormData(e.target);
     const assetId = returnModal.id;
@@ -2147,10 +2143,10 @@ function App() {
     await addAuditLog("Asset Return", `Returned ${assetId} to inventory at ${location}`);
     addToast("Asset Returned", `Asset ${assetId} returned to inventory.`, "success");
     setReturnModal(null);
-  };
+  });
 
   // Handle Edit Assignment Submit
-  const handleEditAssignmentSubmit = async (e) => {
+  const [handleEditAssignmentSubmit, savingAssignment] = useAsyncAction(async (e) => {
     e.preventDefault();
     const data = new FormData(e.target);
     const id = editAssignmentModal.id;
@@ -2193,10 +2189,10 @@ function App() {
     await addAuditLog("Assignment Edit", `Updated assignment details for asset ${assetId}`);
     addToast("Assignment Updated", "Assignment details saved successfully.", "success");
     setEditAssignmentModal(null);
-  };
+  });
 
   // Handle Return Assignment Submit
-  const handleReturnAssignmentSubmit = async (e) => {
+  const [handleReturnAssignmentSubmit, returningAssignment] = useAsyncAction(async (e) => {
     e.preventDefault();
     const data = new FormData(e.target);
     const id = returnAssignmentModal.id;
@@ -2232,7 +2228,7 @@ function App() {
     await addAuditLog("Asset Return", `Returned ${returnQty} units of asset ${assetId} to inventory at ${location}`);
     addToast("Asset Returned", "Returned quantity checked in successfully.", "success");
     setReturnAssignmentModal(null);
-  };
+  });
 
   // Handle disposal
   const handleDisposeAsset = async (asset, reason) => {
@@ -2571,7 +2567,7 @@ function App() {
   // Invoice-to-asset mapping. `assetIds` is the complete desired set for the
   // invoice, so this adds, removes and replaces in one call. An empty set
   // unlinks every asset.
-  const handleBulkMapAssetsToInvoice = async (invoiceId, commaSeparatedAssetIds) => {
+  const [handleBulkMapAssetsToInvoice, mappingInvoiceAssets] = useAsyncAction(async (invoiceId, commaSeparatedAssetIds) => {
     if (!invoiceId) {
       addToast("Error", "Please select an Invoice ID.", "error");
       return;
@@ -2626,10 +2622,10 @@ function App() {
     } catch (err) {
       addToast("Error", err.message || "Failed to update invoice mapping.", "error");
     }
-  };
+  });
 
   // Register AMC Contract
-  const handleAddAMC = async (e) => {
+  const [handleAddAMC, addingAmc] = useAsyncAction(async (e) => {
     e.preventDefault();
     if (!hasPermission('finance')) {
       addToast("Access Denied", "Only Finance Team or Super Admins can register AMCs.", "error");
@@ -2694,12 +2690,12 @@ function App() {
     addToast("AMC Registered", `Contract ${newAmc.id} created successfully.`, "success");
     e.target.reset();
     setNewAmcServiceSchedule('Monthly');
-  };
+  });
 
   // Link Asset to AMC
-  const handleMapAssetToAmc = async (amcId, assetId) => {
+  const [handleMapAssetToAmc, mappingAmcAsset] = useAsyncAction(async (amcId, assetId) => {
     if (!hasPermission('finance')) return;
-    
+
     // Check if asset exists
     const asset = assets.find(a => a.id === assetId);
     if (!asset) {
@@ -2733,10 +2729,10 @@ function App() {
 
     await addAuditLog("AMC Asset Mapping", `Mapped asset ${assetId} to AMC Contract ${amcId}`);
     addToast("Asset Mapped", `${assetId} linked to ${amcId}.`, "success");
-  };
+  });
 
   // Register Invoice
-  const handleAddInvoice = async (e) => {
+  const [handleAddInvoice, addingInvoice] = useAsyncAction(async (e) => {
     e.preventDefault();
     if (!hasPermission('finance')) {
       addToast("Access Denied", "Only Finance Team or Super Admins can upload invoices.", "error");
@@ -2842,10 +2838,10 @@ function App() {
     await addAuditLog("Invoice Registration", `Registered invoice ${newInv.id} from ${newInv.vendor}`);
     addToast("Invoice Registered", `Invoice ${newInv.id} registered successfully.`, "success");
     e.target.reset();
-  };
+  });
 
   // Upload Document
-  const handleUploadDocument = async (e) => {
+  const [handleUploadDocument, uploadingDocument] = useAsyncAction(async (e) => {
     e.preventDefault();
     const data = new FormData(e.target);
     const fileInput = e.target.file;
@@ -2897,10 +2893,10 @@ function App() {
     addToast("Document Uploaded", `${newDoc.name} stored in repository.`, "success");
     e.target.reset();
     setNewDocCategory('Invoice');
-  };
+  });
 
   // Add AMC service history
-  const handleAddAMCServiceRecord = async (e, amcId) => {
+  const [handleAddAMCServiceRecord, addingServiceRecord] = useAsyncAction(async (e, amcId) => {
     e.preventDefault();
     const data = new FormData(e.target);
     const date = data.get('date');
@@ -2937,7 +2933,7 @@ function App() {
     await addAuditLog("AMC Maintenance", `Logged service record for contract ${amcId}`);
     addToast("Service Logged", "Maintenance service details saved.", "success");
     e.target.reset();
-  };
+  });
 
   // Generate Reports
   const generateReportData = () => {
@@ -3401,9 +3397,7 @@ function App() {
                 {firstLoginSuccess}
               </div>
             )}
-            <button type="submit" className="btn btn-primary" disabled={firstLoginLoading}>
-              {firstLoginLoading ? 'Updating...' : 'Update Password'}
-            </button>
+            <SpinnerButton type="submit" className="btn btn-primary" loading={firstLoginLoading} loadingText="Updating…">Update Password</SpinnerButton>
           </form>
         </div>
       </div>
@@ -3629,9 +3623,7 @@ function App() {
                           {selectedNotificationIds.length === notifications.length ? 'Deselect all' : 'Select all'}
                         </button>
                       )}
-                      <button className="notif-clear-btn" onClick={handleClearNotifications}>
-                        Mark all read
-                      </button>
+                      <SpinnerButton className="notif-clear-btn" onClick={handleClearNotifications} loadingText="Marking…">Mark all read</SpinnerButton>
                     </div>
                   </div>
 
@@ -3672,16 +3664,16 @@ function App() {
                             <span className="notif-text">{n.text}</span>
                             <RelativeTime className="notif-time" value={n.createdAt} />
                           </div>
-                          <button
+                          <SpinnerButton
                             className="btn-table-action delete"
                             title="Delete notification"
                             aria-label="Delete notification"
                             onClick={() => handleDeleteNotification(n)}
                             disabled={isDeletingNotifications}
+                            icon={Trash2}
+                            spinnerSize={13}
                             style={{ flexShrink: 0 }}
-                          >
-                            <Trash2 size={13} />
-                          </button>
+                          />
                         </div>
                       ))
                     )}
@@ -3967,9 +3959,9 @@ function App() {
                     {selectedAssetIds.length} asset{selectedAssetIds.length > 1 ? 's' : ''} selected
                   </span>
                   <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-                    <button className="btn btn-secondary btn-sm" onClick={() => handleBulkAssetStatusChange('Available')}>Mark Available</button>
-                    <button className="btn btn-secondary btn-sm" onClick={() => handleBulkAssetStatusChange('Under Maintenance')}>Mark Maintenance</button>
-                    <button className="btn btn-secondary btn-sm" onClick={() => handleBulkAssetStatusChange('Disposed')}>Mark Disposed</button>
+                    <SpinnerButton className="btn btn-secondary btn-sm" onClick={() => handleBulkAssetStatusChange('Available')} loadingText="Working…">Mark Available</SpinnerButton>
+                    <SpinnerButton className="btn btn-secondary btn-sm" onClick={() => handleBulkAssetStatusChange('Under Maintenance')} loadingText="Working…">Mark Maintenance</SpinnerButton>
+                    <SpinnerButton className="btn btn-secondary btn-sm" onClick={() => handleBulkAssetStatusChange('Disposed')} loadingText="Working…">Mark Disposed</SpinnerButton>
                     
                     {/* Bulk Category */}
                     <div style={{ position: 'relative', display: 'inline-block' }}>
@@ -3981,7 +3973,7 @@ function App() {
                             value={bulkAssetCategoryValue} 
                             onChange={e => setBulkAssetCategoryValue(e.target.value)}
                           />
-                          <button className="btn btn-primary btn-sm" onClick={handleBulkAssetCategoryChange}>Apply</button>
+                          <SpinnerButton className="btn btn-primary btn-sm" onClick={handleBulkAssetCategoryChange} loadingText="Applying…">Apply</SpinnerButton>
                         </div>
                       )}
                     </div>
@@ -3999,7 +3991,7 @@ function App() {
                             onChange={e => setBulkAssetLocationValue(e.target.value)} 
                             style={{ height: '32px', marginBottom: '4px'}}
                           />
-                          <button className="btn btn-primary btn-sm" onClick={handleBulkAssetLocationChange}>Apply</button>
+                          <SpinnerButton className="btn btn-primary btn-sm" onClick={handleBulkAssetLocationChange} loadingText="Applying…">Apply</SpinnerButton>
                         </div>
                       )}
                     </div>
@@ -4014,12 +4006,12 @@ function App() {
                             value={bulkAssetDeptValue} 
                             onChange={e => setBulkAssetDeptValue(e.target.value)}
                           />
-                          <button className="btn btn-primary btn-sm" onClick={handleBulkAssetDeptChange}>Apply</button>
+                          <SpinnerButton className="btn btn-primary btn-sm" onClick={handleBulkAssetDeptChange} loadingText="Applying…">Apply</SpinnerButton>
                         </div>
                       )}
                     </div>
 
-                    <button className="btn btn-secondary btn-sm" style={{ color: 'var(--status-disposed)'}} onClick={handleBulkDeleteAssets}>Delete</button>
+                    <SpinnerButton className="btn btn-secondary btn-sm" style={{ color: 'var(--status-disposed)'}} onClick={handleBulkDeleteAssets} loadingText="Deleting…">Delete</SpinnerButton>
                   </div>
                 </div>
               )}
@@ -4164,20 +4156,16 @@ function App() {
                                 </>
                               )}
                               {hasPermission('write', asset.category) && asset.status !== 'Disposed' && (
-                                <button className="btn-table-action" style={{ color: 'var(--status-maintenance)' }} onClick={() => {
+                                <SpinnerButton className="btn-table-action" style={{ color: 'var(--status-maintenance)' }} onClick={() => {
                                   const reason = prompt("Enter asset retirement / disposal reason:");
-                                  if (reason) handleDisposeAsset(asset, reason);
-                                }} title="Mark as Disposed">
-                                  <AlertTriangle size={15} />
-                                </button>
+                                  if (reason) return handleDisposeAsset(asset, reason);
+                                }} icon={AlertTriangle} spinnerSize={15} title="Mark as Disposed" />
                               )}
                               <button className="btn-table-action" onClick={() => setQrStickerModal(asset)} title="View QR Label sticker">
                                 <QrCode size={15} />
                               </button>
                               {hasPermission('delete', asset.category) && (
-                                <button className="btn-table-action delete" onClick={() => handleDeleteAsset(asset)} title="Delete Asset Record">
-                                  <Trash2 size={15} />
-                                </button>
+                                <SpinnerButton className="btn-table-action delete" onClick={() => handleDeleteAsset(asset)} icon={Trash2} spinnerSize={15} title="Delete Asset Record" />
                               )}
                             </div>
                           </td>
@@ -4490,9 +4478,7 @@ function App() {
                         <input type="file" name="agreementFile" className="form-input" required />
                       </div>
                       <div className="form-group full-width" style={{ marginTop: '8px' }}>
-                        <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
-                          Save & Register AMC
-                        </button>
+                        <SpinnerButton type="submit" className="btn btn-primary" style={{ width: '100%' }} loading={addingAmc} loadingText="Registering…">Save &amp; Register AMC</SpinnerButton>
                       </div>
                     </form>
                   ) : (
@@ -4532,9 +4518,7 @@ function App() {
                           required
                         />
                       </div>
-                      <button type="submit" className="btn btn-secondary" style={{ marginTop: '8px' }}>
-                        Link Asset
-                      </button>
+                      <SpinnerButton type="submit" className="btn btn-secondary" style={{ marginTop: '8px' }} loading={mappingAmcAsset} loadingText="Linking…">Link Asset</SpinnerButton>
                     </form>
                   ) : (
                     <div style={{ color: 'var(--text-secondary)', fontSize: '13px', textAlign: 'center', padding: '24px' }}>
@@ -4614,7 +4598,7 @@ function App() {
                             </div>
                             <div style={{ display: 'flex', gap: '8px' }}>
                               <input type="text" name="notes" placeholder="Technician diagnosis summary" className="form-input form-input-sm" style={{ flexGrow: 1}} required />
-                              <button type="submit" className="btn btn-secondary btn-sm" >Save Log</button>
+                              <SpinnerButton type="submit" className="btn btn-secondary btn-sm" loading={addingServiceRecord} loadingText="Saving…">Save Log</SpinnerButton>
                             </div>
                           </form>
                         </div>
@@ -4735,9 +4719,7 @@ function App() {
                                 <input type="text" name="linkAssetIds" placeholder="e.g. AST-201, AST-202" className="form-input" />
                               </div>
                               <div className="form-group full-width" style={{ marginTop: '8px' }}>
-                                <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
-                                  Record & File Purchase Invoice
-                                </button>
+                                <SpinnerButton type="submit" className="btn btn-primary" style={{ width: '100%' }} loading={addingInvoice} loadingText="Filing…">Record &amp; File Purchase Invoice</SpinnerButton>
                               </div>
                             </form>
                           ) : (
@@ -4876,9 +4858,7 @@ function App() {
                                   <Download size={14} />
                                   Export Selected
                                 </button>
-                                <button className="btn btn-primary" style={{ backgroundColor: 'var(--status-disposed)' }} onClick={handleBulkDeleteInvoices}>
-                                  Delete Selected
-                                </button>
+                                <SpinnerButton className="btn btn-primary" style={{ backgroundColor: 'var(--status-disposed)' }} onClick={handleBulkDeleteInvoices} loadingText="Deleting…">Delete Selected</SpinnerButton>
                               </div>
                             </div>
                           )}
@@ -5279,9 +5259,7 @@ function App() {
                               </span>
                             </div>
 
-                            <button type="submit" className="btn btn-primary" style={{ marginTop: '8px' }} disabled={!mappingInvoiceId}>
-                              Save Asset Mapping
-                            </button>
+                            <SpinnerButton type="submit" className="btn btn-primary" style={{ marginTop: '8px' }} disabled={!mappingInvoiceId} loading={mappingInvoiceAssets} loadingText="Saving…">Save Asset Mapping</SpinnerButton>
                           </form>
                         ) : (
                           <div style={{ color: 'var(--text-secondary)', fontSize: '13px', textAlign: 'center', padding: '24px' }}>
@@ -5386,10 +5364,7 @@ function App() {
                       <input type="text" name="association" placeholder="e.g. Asset AST-002, AMC AMC-101" className="form-input" required />
                     </div>
                     <div className="form-group full-width" style={{ marginTop: '8px' }}>
-                      <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
-                        <FileUp size={16} />
-                        Upload Attachment Scan
-                      </button>
+                      <SpinnerButton type="submit" className="btn btn-primary" style={{ width: '100%' }} icon={FileUp} spinnerSize={16} loading={uploadingDocument} loadingText="Uploading…">Upload Attachment Scan</SpinnerButton>
                     </div>
                   </form>
                 </div>
@@ -5892,7 +5867,7 @@ function App() {
           footer={
             <>
               <button type="button" className="btn btn-secondary" onClick={() => setAddAssetModal(false)}>Cancel</button>
-              <button type="submit" className="btn btn-primary">File Asset Record</button>
+              <SpinnerButton type="submit" className="btn btn-primary" loading={addingAsset} loadingText="Filing…">File Asset Record</SpinnerButton>
 
             </>
           }
@@ -5998,8 +5973,8 @@ function App() {
           onSubmit={handleEditAsset}
           footer={
             <>
-              <button type="button" className="btn btn-secondary" onClick={() => setEditAssetModal(null)}>Cancel</button>
-              <button type="submit" className="btn btn-primary">Save Changes</button>
+              <button type="button" className="btn btn-secondary" onClick={() => setEditAssetModal(null)} disabled={editingAsset}>Cancel</button>
+              <SpinnerButton type="submit" className="btn btn-primary" loading={editingAsset} loadingText="Saving…">Save Changes</SpinnerButton>
 
             </>
           }
@@ -6317,8 +6292,8 @@ function App() {
           maxWidth="450px"
           footer={
             <>
-              <button type="button" className="btn btn-secondary" onClick={() => setReturnModal(null)}>Cancel</button>
-              <button type="submit" className="btn btn-primary">Record Return</button>
+              <button type="button" className="btn btn-secondary" onClick={() => setReturnModal(null)} disabled={returningAsset}>Cancel</button>
+              <SpinnerButton type="submit" className="btn btn-primary" loading={returningAsset} loadingText="Returning…">Record Return</SpinnerButton>
 
             </>
           }
@@ -6446,8 +6421,8 @@ function App() {
           maxWidth="450px"
           footer={
             <>
-              <button type="button" className="btn btn-secondary" onClick={() => setEditAssignmentModal(null)}>Cancel</button>
-              <button type="submit" className="btn btn-primary">Save Changes</button>
+              <button type="button" className="btn btn-secondary" onClick={() => setEditAssignmentModal(null)} disabled={savingAssignment}>Cancel</button>
+              <SpinnerButton type="submit" className="btn btn-primary" loading={savingAssignment} loadingText="Saving…">Save Changes</SpinnerButton>
 
             </>
           }
@@ -6491,9 +6466,8 @@ function App() {
           maxWidth="450px"
           footer={
             <>
-              <button type="button" className="btn btn-secondary" onClick={() => setReturnAssignmentModal(null)}>Cancel</button>
-              <button type="submit" className="btn btn-primary">Record Return</button>
-
+              <button type="button" className="btn btn-secondary" onClick={() => setReturnAssignmentModal(null)} disabled={returningAssignment}>Cancel</button>
+              <SpinnerButton type="submit" className="btn btn-primary" loading={returningAssignment} loadingText="Returning…">Record Return</SpinnerButton>
             </>
           }
         >

@@ -3,6 +3,7 @@ import { Save, RotateCcw, ShieldCheck, Lock } from 'lucide-react';
 import { api } from './api';
 import Checkbox from './Checkbox';
 import CustomSelect from './CustomSelect';
+import { SpinnerButton } from './SpinnerButton';
 import { roleLabel, ROLE_ORDER } from './permissions';
 
 /**
@@ -172,10 +173,7 @@ const RolePermissionMatrix = ({ modules = [], verbLabels = {}, matrix, setMatrix
 
       {isSuperAdmin && !locked && (
         <div className="action-row" style={{ marginTop: 'var(--sp-4)' }}>
-          <button className="btn btn-primary" onClick={save} disabled={!dirty || saving} aria-busy={saving}>
-            <Save size={15} />
-            {saving ? 'Saving…' : `Save ${roleLabel(selectedRole)}`}
-          </button>
+          <SpinnerButton className="btn btn-primary" onClick={save} disabled={!dirty} loading={saving} loadingText="Saving…" icon={Save} spinnerSize={15}>Save {roleLabel(selectedRole)}</SpinnerButton>
           <button className="btn btn-secondary" onClick={discard} disabled={!dirty || saving}>
             <RotateCcw size={15} /> Discard
           </button>

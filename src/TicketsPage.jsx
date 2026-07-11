@@ -17,6 +17,8 @@ import { parseTimestamp } from './time';
 import CustomSelect from './CustomSelect';
 import AsyncBoundary from './AsyncBoundary';
 import { STATUS } from './asyncStatus';
+import { SpinnerButton } from './SpinnerButton';
+import { useAsyncAction } from './useAsyncAction';
 import { PageSkeleton } from './Skeleton';
 
 const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addToast, canManageTickets = false }) => {
@@ -281,7 +283,7 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
   };
 
   // Add Comment
-  const handleAddComment = async (e) => {
+  const [handleAddComment, postingComment] = useAsyncAction(async (e) => {
     e.preventDefault();
     if (!commentText.trim() || !activeTicket) return;
 
@@ -301,7 +303,7 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
       // data is worse than refusing the action.
       addToast('Not connected', 'You are not connected to the server. This action was not performed.', 'error');
     }
-  };
+  });
 
   // Assign Ticket
   const handleAssignTicket = async (assignToUserId) => {
@@ -1333,10 +1335,7 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
                         <span style={{ color: 'var(--status-maintenance)', fontWeight: 600 }}>Mark as Private Internal staff note</span>
                       </label>
                     ) : <div />}
-                    <button type="submit" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <Send size={14} />
-                      Submit Update
-                    </button>
+                    <SpinnerButton type="submit" className="btn btn-primary" icon={Send} loading={postingComment} loadingText="Posting…">Submit Update</SpinnerButton>
                   </div>
                 </form>
               </div>
@@ -1396,15 +1395,14 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
                         placeholder="-- Choose Agent --"
                         options={[{ value: '', label: '-- Choose Agent --' }, ...usersList.filter(u => u.role !== 'Employee').map(u => ({ value: u.id, label: (u.name || u.username) + ' (' + u.role + ')' }))]} />
 
-                      <button
+                      <SpinnerButton
                         type="button"
                         className="btn btn-secondary btn-sm"
-                        style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px'}}
+                        style={{ width: '100%' }}
                         onClick={handleAutoAssignTicket}
-                      >
-                        <Users size={14} />
-                        Auto-Assign (Workload)
-                      </button>
+                        icon={Users}
+                        loadingText="Assigning…"
+                      >Auto-Assign (Workload)</SpinnerButton>
                     </div>
                   )}
                 </div>

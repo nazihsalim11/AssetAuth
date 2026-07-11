@@ -8,6 +8,8 @@ import {
 import { api } from './api';
 import { openStoredFile } from './files';
 import Markdown from './Markdown';
+import { SpinnerButton } from './SpinnerButton';
+import { Spinner } from './Spinner';
 import { silk } from './engine/motion';
 
 /* ------------------------------------------------------------------ editor */
@@ -137,7 +139,7 @@ const ArticleEditor = ({ article, categories, allArticles, onSave, onCancel, add
       </div>
 
       <div className="form-group">
-        <label className="form-label">Attachments</label>
+        <label className="form-label">Attachments {uploading && <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}><Spinner size={12} /> Uploading…</span>}</label>
         <input type="file" onChange={uploadAttachment} disabled={uploading} className="form-input" />
         {attachments.length > 0 && (
           <div className="attachment-preview-grid">
@@ -153,7 +155,7 @@ const ArticleEditor = ({ article, categories, allArticles, onSave, onCancel, add
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
         <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={saving}><X size={14} /> Cancel</button>
-        <button type="submit" className="btn btn-primary" disabled={saving}><Save size={14} /> {saving ? 'Saving…' : 'Save article'}</button>
+        <SpinnerButton type="submit" className="btn btn-primary" icon={Save} loading={saving} loadingText="Saving…">Save article</SpinnerButton>
       </div>
     </form>
   );
@@ -173,11 +175,11 @@ const ArticleView = ({ article, onBack, onOpenRelated, canAuthor, onEdit, onDele
       </div>
       {canAuthor && (
         <div className="page-actions">
-          <button className="btn btn-secondary" onClick={onTogglePublish}>
+          <SpinnerButton className="btn btn-secondary" onClick={onTogglePublish} loadingText="Working…">
             {article.is_published ? <><EyeOff size={14} /> Unpublish</> : <><Send size={14} /> Publish</>}
-          </button>
+          </SpinnerButton>
           <button className="btn btn-secondary" onClick={onEdit}><Edit2 size={14} /> Edit</button>
-          <button className="btn btn-danger" onClick={onDelete}><Trash2 size={14} /> Delete</button>
+          <SpinnerButton className="btn btn-danger" onClick={onDelete} icon={Trash2} loadingText="Deleting…">Delete</SpinnerButton>
         </div>
       )}
     </div>

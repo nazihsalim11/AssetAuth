@@ -3,6 +3,7 @@ import { Save, RotateCcw, SlidersHorizontal, X } from 'lucide-react';
 import { api } from './api';
 import Checkbox from './Checkbox';
 import CustomSelect from './CustomSelect';
+import { SpinnerButton } from './SpinnerButton';
 import AsyncBoundary from './AsyncBoundary';
 import { STATUS } from './asyncStatus';
 
@@ -326,10 +327,7 @@ const NotificationPreferences = ({ addToast, canManage = false }) => {
 
         {canManage && (
           <div className="action-row" style={{ marginTop: 'var(--sp-4)' }}>
-            <button className="btn btn-primary" onClick={save} disabled={!dirty || saving} aria-busy={saving}>
-              <Save size={15} />
-              {saving ? 'Saving…' : 'Save preferences'}
-            </button>
+            <SpinnerButton className="btn btn-primary" onClick={save} disabled={!dirty} loading={saving} loadingText="Saving…" icon={Save} spinnerSize={15}>Save preferences</SpinnerButton>
             <button className="btn btn-secondary" onClick={load} disabled={saving || !dirty}>
               <RotateCcw size={15} />
               Discard changes

@@ -10,6 +10,7 @@ import { api } from './api';
 import Modal from './Modal';
 import CustomSelect from './CustomSelect';
 import { SkeletonCards } from './Skeleton';
+import { SpinnerButton } from './SpinnerButton';
 import { silk } from './engine/motion';
 
 /* --------------------------------------------------------------- formatting */
@@ -173,7 +174,7 @@ const ScheduleModal = ({ reportKey, reportLabel, filters, existing, onClose, onS
     <Modal isOpen onClose={onClose} as="form" onSubmit={submit} size="md"
       title={existing ? 'Edit Schedule' : 'Schedule Report'}
       subtitle={existing?.reportLabel || reportLabel}
-      footer={<><button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button><button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : 'Save Schedule'}</button></>}
+      footer={<><button type="button" className="btn btn-secondary" onClick={onClose} disabled={saving}>Cancel</button><SpinnerButton type="submit" className="btn btn-primary" loading={saving} loadingText="Saving…">Save Schedule</SpinnerButton></>}
     >
       <div className="form-group"><label className="form-label">Schedule name</label>
         <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} /></div>
@@ -274,7 +275,7 @@ const ReportsCenter = ({ addToast, canExport = false }) => {
             <CustomSelect value={reportKey} onChange={(e) => setReportKey(e.target.value)} searchable
               options={Object.entries(grouped).flatMap(([group, list]) => list.map((r) => ({ value: r.key, label: `${group} — ${r.label}` })))} />
           </div>
-          <button className="btn btn-primary" onClick={run} disabled={running || !reportKey}><Play size={15} /> {running ? 'Running…' : 'Run Report'}</button>
+          <SpinnerButton className="btn btn-primary" onClick={run} disabled={!reportKey} loading={running} loadingText="Running…" icon={Play} spinnerSize={15}>Run Report</SpinnerButton>
         </div>
 
         {hasFilters && (
@@ -320,7 +321,7 @@ const ReportsCenter = ({ addToast, canExport = false }) => {
               <button className="btn btn-secondary btn-sm" onClick={() => exportCsv(report)} disabled={!report.rows.length}><Download size={14} /> CSV</button>
               <button className="btn btn-secondary btn-sm" onClick={() => exportPdf(report)} disabled={!report.rows.length}><Download size={14} /> PDF</button>
               <button className="btn btn-secondary btn-sm" onClick={() => window.print()}><Printer size={14} /> Print</button>
-              {canExport && <button className="btn btn-secondary btn-sm" onClick={email} disabled={!report.rows.length}><Mail size={14} /> Email</button>}
+              {canExport && <SpinnerButton className="btn btn-secondary btn-sm" onClick={email} disabled={!report.rows.length} icon={Mail} loadingText="Sending…">Email</SpinnerButton>}
               {canExport && <button className="btn btn-secondary btn-sm" onClick={() => setScheduling({})}><CalendarClock size={14} /> Schedule</button>}
             </div>
           </div>
