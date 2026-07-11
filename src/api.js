@@ -148,6 +148,8 @@ export const api = {
 
   // Assets
   getAssets: () => apiFetch('/assets'),
+  // Master data: valid Item Types (Asset Tag Subtypes) grouped by Asset Category.
+  getAssetSubtypes: () => apiFetch('/asset-subtypes'),
   createAsset: (asset) => apiFetch('/assets', { method: 'POST', body: JSON.stringify(camelToSnake(asset)) }),
   updateAsset: (id, fields) => apiFetch(`/assets/${id}`, { method: 'PATCH', body: JSON.stringify(camelToSnake(fields)) }),
   // Custodian handover: moves the underlying asset_assignments rows so the registry

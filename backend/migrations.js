@@ -912,6 +912,46 @@ const runMigrations = async () => {
       CREATE INDEX IF NOT EXISTS scheduled_reports_due_idx ON scheduled_reports (active, next_run);
     `);
 
+    // 14. Asset master data + optional lifecycle fields.
+    //   - associate_department: a secondary owning department, captured in both the
+    //     manual registration form and the bulk importer.
+    //   - depreciation_life_years becomes nullable so Useful Lifespan is optional.
+    await db.directQuery(`
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS associate_department VARCHAR(100);
+      ALTER TABLE assets ALTER COLUMN depreciation_life_years DROP NOT NULL;
+    `);
+
+    // asset_subtypes is the master list of valid Item Types (Asset Tag Subtypes)
+    // per Asset Category. It replaces the old hard-coded IT->Laptop / Office->Chair
+    // assumption: the UI reads it to build category-dependent dropdowns and the bulk
+    // importer validates against it. Admins can add rows without them being wiped.
+    await db.directQuery(`
+      CREATE TABLE IF NOT EXISTS asset_subtypes (
+        id SERIAL PRIMARY KEY,
+        category asset_category NOT NULL,
+        name VARCHAR(100) NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS asset_subtypes_cat_name_idx
+        ON asset_subtypes (category, LOWER(name));
+    `);
+
+    // Seed the default catalogue. ON CONFLICT DO NOTHING makes re-runs a no-op and
+    // preserves any admin-added rows.
+    await db.directQuery(`
+      INSERT INTO asset_subtypes (category, name) VALUES
+        ('IT','Laptop'),('IT','Desktop'),('IT','Monitor'),('IT','Printer'),
+        ('IT','Keyboard'),('IT','Mouse'),('IT','Server'),('IT','Switch'),
+        ('IT','Router'),('IT','UPS'),('IT','Storage'),('IT','Mobile'),
+        ('IT','Tablet'),('IT','Scanner'),('IT','Projector'),('IT','Docking Station'),
+        ('IT','Network Attached Storage'),('IT','Firewall'),
+        ('Office','Chair'),('Office','Desk'),('Office','Table'),('Office','Cabinet'),
+        ('Office','Sofa'),('Office','Whiteboard'),('Office','Projector Screen'),
+        ('Office','AC'),('Office','Fan'),('Office','CCTV'),
+        ('Office','Fire Extinguisher'),('Office','Water Dispenser'),('Office','Locker')
+      ON CONFLICT DO NOTHING;
+    `);
+
     console.log('Database migrations completed successfully.');
   } catch (err) {
     console.error('Database migration failed:', err);

@@ -134,28 +134,47 @@ app.get('/api/assets', async (req, res) => {
   }
 });
 
+// Master data: valid Item Types (Asset Tag Subtypes) grouped by Asset Category.
+// Drives the category-dependent dropdowns in the UI and validates bulk imports,
+// replacing the old hard-coded IT->Laptop / Office->Chair mapping.
+app.get('/api/asset-subtypes', async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  try {
+    const { rows } = await db.query('SELECT category, name FROM asset_subtypes ORDER BY category, name');
+    const grouped = {};
+    for (const r of rows) (grouped[r.category] = grouped[r.category] || []).push(r.name);
+    res.json(grouped);
+  } catch (err) {
+    console.error('GET /api/asset-subtypes failed:', err);
+    res.status(500).json({ error: 'Could not load asset subtypes: ' + err.message });
+  }
+});
+
 app.post('/api/assets', async (req, res) => {
   const actingUser = await requirePermission(req, res, 'assets', 'create');
   if (!actingUser) return;
 
   const {
     id, name, serialNumber, category, type, status, cost, purchaseDate,
-    warrantyExpiry, department, location, amcId, invoiceId,
+    warrantyExpiry, department, associateDepartment, location, amcId, invoiceId,
     assignedEmployee, depreciationLifeYears, notes
   } = req.body;
 
   const query = `
     INSERT INTO assets (
       id, name, serial_number, category, type, status, cost, purchase_date,
-      warranty_expiry, department, location, amc_id, invoice_id,
+      warranty_expiry, department, associate_department, location, amc_id, invoice_id,
       assigned_employee, depreciation_life_years, notes
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
     RETURNING *;
   `;
+  // Useful Lifespan is optional: an omitted/blank value is stored as NULL rather
+  // than being forced to a default, so "no value" is preserved faithfully.
   const values = [
     id, name, serialNumber, category, type, status || 'Available', cost || 0, purchaseDate || null,
-    warrantyExpiry || null, department || '', location || '', amcId || null, invoiceId || null,
-    assignedEmployee || '', depreciationLifeYears || 5, notes || ''
+    warrantyExpiry || null, department || '', associateDepartment || null, location || '', amcId || null, invoiceId || null,
+    assignedEmployee || '', depreciationLifeYears ? parseInt(depreciationLifeYears) : null, notes || ''
   ];
 
   try {
@@ -204,6 +223,7 @@ app.patch('/api/assets/:id', async (req, res) => {
     purchaseDate: 'purchase_date',
     warrantyExpiry: 'warranty_expiry',
     department: 'department',
+    associateDepartment: 'associate_department',
     location: 'location',
     amcId: 'amc_id',
     invoiceId: 'invoice_id',
@@ -2026,12 +2046,20 @@ app.post('/api/import/assets', async (req, res) => {
     await client.query('BEGIN');
     const batchAssetIds = new Set();
 
+    // Load the master data once so every category exposes all of its valid Item
+    // Types. A subtype in the sheet is validated against this set rather than being
+    // overwritten with a hard-coded value.
+    const subtypeRows = await client.query('SELECT category, LOWER(name) AS name FROM asset_subtypes');
+    const validSubtypes = {};
+    for (const r of subtypeRows.rows) (validSubtypes[r.category] = validSubtypes[r.category] || new Set()).add(r.name);
+
     for (let i = 0; i < assets.length; i++) {
       const rowNum = i + 1;
       const asset = assets[i];
       const {
-        assetId, name, category, brand, model, serialNumber, quantity,
-        unit, purchaseDate, purchaseCost, supplier, warrantyExpiry, location, status
+        assetId, name, category, type, brand, model, serialNumber, quantity,
+        unit, purchaseDate, purchaseCost, supplier, warrantyExpiry, location, status,
+        department, associateDepartment, depreciationLifeYears
       } = asset;
 
       const errors = [];
@@ -2041,6 +2069,20 @@ app.post('/api/import/assets', async (req, res) => {
         errors.push('Category is required');
       } else if (category !== 'IT' && category !== 'Office') {
         errors.push('Category must be "IT" or "Office"');
+      }
+
+      // Item Type is optional, but when supplied it must be a configured subtype for
+      // the chosen category — this is what makes the mapping data-driven.
+      const subtype = (type || '').trim();
+      if (subtype && validSubtypes[category] && !validSubtypes[category].has(subtype.toLowerCase())) {
+        errors.push(`"${subtype}" is not a valid Asset Tag Subtype for category "${category}"`);
+      }
+
+      const lifespan = depreciationLifeYears === undefined || depreciationLifeYears === null || depreciationLifeYears === ''
+        ? null
+        : parseInt(depreciationLifeYears);
+      if (lifespan !== null && (Number.isNaN(lifespan) || lifespan < 0)) {
+        errors.push('Useful Lifespan must be a non-negative whole number');
       }
 
       if (errors.length > 0) {
@@ -2064,19 +2106,19 @@ app.post('/api/import/assets', async (req, res) => {
 
       const qty = parseInt(quantity) || 1;
       const cost = parseFloat(purchaseCost) || 0;
-      const type = category === 'IT' ? 'Laptops' : 'Chairs';
 
       const insertQuery = `
         INSERT INTO assets (
           id, name, category, type, brand, model, serial_number, total_quantity, available_quantity,
-          assigned_quantity, unit, purchase_date, cost, supplier, warranty_expiry, location, status
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+          assigned_quantity, unit, purchase_date, cost, supplier, warranty_expiry, location, status,
+          department, associate_department, depreciation_life_years
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
       `;
       const values = [
         assetId,
         name,
         category,
-        type,
+        subtype,
         brand || '',
         model || '',
         serialNumber || null,
@@ -2089,7 +2131,10 @@ app.post('/api/import/assets', async (req, res) => {
         supplier || '',
         warrantyExpiry || null,
         location || '',
-        status || 'Available'
+        status || 'Available',
+        department || '',
+        associateDepartment || null,
+        lifespan
       ];
 
       await client.query(insertQuery, values);

@@ -1155,8 +1155,13 @@ function App() {
 
   // Controlled states for Modal selectors
   const [addAssetCategory, setAddAssetCategory] = useState('IT');
+  const [addAssetType, setAddAssetType] = useState('');
   const [addAssetInvoiceId, setAddAssetInvoiceId] = useState('');
   const [editAssetInvoiceId, setEditAssetInvoiceId] = useState('');
+  const [editAssetType, setEditAssetType] = useState('');
+  // Master data: { IT: [...subtypes], Office: [...subtypes] }. Loaded from the
+  // server so the Item Type dropdowns are data-driven, not hard-coded.
+  const [assetSubtypes, setAssetSubtypes] = useState({});
   const [allocateEmployee, setAllocateEmployee] = useState('');
   const [allocateDepartment, setAllocateDepartment] = useState('');
   const [isAllocating, setIsAllocating] = useState(false);
@@ -1236,7 +1241,7 @@ function App() {
           // getDocuments 403s for roles without viewDocuments (enforced server-side),
           // so it is made resilient here — an unauthorised repository yields [] rather
           // than failing the whole batch.
-          const [dbAssets, dbAmcs, dbInvoices, dbDocuments, dbMovements, dbLogs, dbNotifications, dbEmails, dbUsers, dbAssignments, dbRolePerms, dbDepartments] = await Promise.all([
+          const [dbAssets, dbAmcs, dbInvoices, dbDocuments, dbMovements, dbLogs, dbNotifications, dbEmails, dbUsers, dbAssignments, dbRolePerms, dbDepartments, dbAssetSubtypes] = await Promise.all([
             api.getAssets(),
             api.getAmcs(),
             api.getInvoices(),
@@ -1248,7 +1253,8 @@ function App() {
             api.getUsers(),
             api.getAssignments(),
             api.getRolePermissions(),
-            api.getDepartments().catch(() => null)
+            api.getDepartments().catch(() => null),
+            api.getAssetSubtypes().catch(() => ({}))
           ]);
           if (cancelled) return;
           if (dbRolePerms && typeof dbRolePerms === 'object') {
@@ -1265,6 +1271,7 @@ function App() {
             }
           }
           if (Array.isArray(dbDepartments) && dbDepartments.length) setDepartments(dbDepartments);
+          if (dbAssetSubtypes && typeof dbAssetSubtypes === 'object') setAssetSubtypes(dbAssetSubtypes);
 
           // Promise.all above rejects if any fetch fails, so reaching this point
           // means every response is authoritative — including an empty one. Always
@@ -1451,10 +1458,11 @@ function App() {
   const [returnAssignmentModal, setReturnAssignmentModal] = useState(null);
   const [showProfileModal, setShowProfileModal] = useState(false);
 
-  // Sync controlled editAssetInvoiceId state when Edit Asset Modal opens
+  // Sync controlled editAssetInvoiceId / editAssetType state when Edit Asset Modal opens
   useEffect(() => {
     if (editAssetModal) {
       setEditAssetInvoiceId(editAssetModal.invoiceId || '');
+      setEditAssetType(editAssetModal.type || '');
     }
   }, [editAssetModal]);
   
@@ -1762,11 +1770,13 @@ function App() {
       purchaseDate: data.get('purchaseDate') || new Date().toISOString().split('T')[0],
       warrantyExpiry: data.get('warrantyExpiry'),
       department: data.get('department'),
+      associateDepartment: data.get('associateDepartment') || '',
       location: data.get('location'),
       amcId: "",
       invoiceId: data.get('invoiceId') || "",
       assignedEmployee: "",
-      depreciationLifeYears: parseInt(data.get('depreciationLifeYears') || 5),
+      // Useful Lifespan is optional — a blank field stays null rather than defaulting.
+      depreciationLifeYears: data.get('depreciationLifeYears') ? parseInt(data.get('depreciationLifeYears')) : null,
       disposalDate: "",
       disposalReason: "",
       notes: data.get('notes'),
@@ -1813,6 +1823,7 @@ function App() {
     addToast("Asset Registered", `${newAsset.id} added successfully to inventory.`, "success");
     setAddAssetModal(false);
     setAddAssetCategory('IT');
+    setAddAssetType('');
     setAddAssetInvoiceId('');
   });
 
@@ -1847,8 +1858,10 @@ function App() {
       warrantyExpiry: data.get('warrantyExpiry'),
       location: data.get('location'),
       department: data.get('department'),
+      associateDepartment: data.get('associateDepartment') || '',
       invoiceId: data.get('invoiceId'),
-      depreciationLifeYears: parseInt(data.get('depreciationLifeYears') || 5),
+      // Useful Lifespan is optional — a blank field stays null rather than defaulting.
+      depreciationLifeYears: data.get('depreciationLifeYears') ? parseInt(data.get('depreciationLifeYears')) : null,
       notes: data.get('notes'),
       totalQuantity: totalQty,
       availableQuantity: availableQty,
@@ -5883,7 +5896,7 @@ function App() {
                         { value: "Office", label: "Office Infrastructure" }
                       ]}
                       value={addAssetCategory}
-                      onChange={(e) => setAddAssetCategory(e.target.value)}
+                      onChange={(e) => { setAddAssetCategory(e.target.value); setAddAssetType(''); }}
                       required
                     />
                   </div>
@@ -5892,8 +5905,16 @@ function App() {
                     <input type="text" name="name" placeholder="e.g. ThinkPad L14" className="form-input" required />
                   </div>
                   <div className="form-group">
-                    <label className="form-label">Asset Tag Subtype</label>
-                    <input type="text" name="type" placeholder="e.g. Laptops, Chairs, AC Units" className="form-input" required />
+                    <label className="form-label">Asset Tag Subtype *</label>
+                    <CustomSelect
+                      name="type"
+                      placeholder="Select item type…"
+                      options={(assetSubtypes[addAssetCategory] || []).map(s => ({ value: s, label: s }))}
+                      value={addAssetType}
+                      onChange={(e) => setAddAssetType(e.target.value)}
+                      required
+                      searchable
+                    />
                   </div>
                   <div className="form-group">
                     <label className="form-label">Manufacturer Serial Number</label>
@@ -5952,8 +5973,12 @@ function App() {
                     <input type="text" name="department" placeholder="e.g. Engineering" className="form-input" required />
                   </div>
                   <div className="form-group">
+                    <label className="form-label">Associate Department</label>
+                    <input type="text" name="associateDepartment" placeholder="e.g. Facilities (optional)" className="form-input" />
+                  </div>
+                  <div className="form-group">
                     <label className="form-label">Useful Lifespan (Depreciation Years)</label>
-                    <input type="number" name="depreciationLifeYears" placeholder="5" className="form-input" required />
+                    <input type="number" name="depreciationLifeYears" min={0} placeholder="Optional" className="form-input" />
                   </div>
                   <div className="form-group full-width">
                     <label className="form-label">Administrative Notes</label>
@@ -5987,7 +6012,21 @@ function App() {
                   </div>
                   <div className="form-group">
                     <label className="form-label">Asset Tag Subtype</label>
-                    <input type="text" name="type" defaultValue={editAssetModal.type} className="form-input" required />
+                    <CustomSelect
+                      name="type"
+                      placeholder="Select item type…"
+                      options={(() => {
+                        const base = assetSubtypes[editAssetModal.category] || [];
+                        // Keep any legacy free-text value selectable so an edit never
+                        // silently drops it.
+                        const merged = editAssetType && !base.includes(editAssetType) ? [editAssetType, ...base] : base;
+                        return merged.map(s => ({ value: s, label: s }));
+                      })()}
+                      value={editAssetType}
+                      onChange={(e) => setEditAssetType(e.target.value)}
+                      required
+                      searchable
+                    />
                   </div>
                   <div className="form-group">
                     <label className="form-label">Manufacturer Serial Number</label>
@@ -6046,8 +6085,12 @@ function App() {
                     <input type="text" name="department" defaultValue={editAssetModal.department} className="form-input" required />
                   </div>
                   <div className="form-group">
+                    <label className="form-label">Associate Department</label>
+                    <input type="text" name="associateDepartment" defaultValue={editAssetModal.associateDepartment || ''} placeholder="Optional" className="form-input" />
+                  </div>
+                  <div className="form-group">
                     <label className="form-label">Useful Lifespan (Depreciation Years)</label>
-                    <input type="number" name="depreciationLifeYears" defaultValue={editAssetModal.depreciationLifeYears} className="form-input" required />
+                    <input type="number" name="depreciationLifeYears" min={0} defaultValue={editAssetModal.depreciationLifeYears ?? ''} placeholder="Optional" className="form-input" />
                   </div>
                   <div className="form-group full-width">
                     <label className="form-label">Administrative Notes</label>
@@ -6340,6 +6383,7 @@ function App() {
         type="assets"
         isApiConnected={isApiConnected}
         assetsList={assets}
+        assetSubtypes={assetSubtypes}
         onImportComplete={(updatedAssets) => {
           if (updatedAssets) setAssets(updatedAssets);
           // Refetch assets from API if active
@@ -6579,13 +6623,16 @@ function App() {
                 <h4 style={{ fontSize: '13px', color: 'var(--text-primary)', marginBottom: '4px' }}>Depreciation & Asset Value Lifespan</h4>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
                   <span>Calculated useful life:</span>
-                  <span><strong>{assetDetailModal.depreciationLifeYears} Years</strong></span>
+                  <span><strong>{assetDetailModal.depreciationLifeYears ? `${assetDetailModal.depreciationLifeYears} Years` : 'Not set'}</strong></span>
                 </div>
-                {/* Straight line depreciation mockup */}
+                {/* Straight line depreciation mockup — only meaningful when a useful
+                    life has been recorded, which is now optional. */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginTop: '4px' }}>
                   <span>Current Residual Value:</span>
                   <span style={{ color: 'var(--status-available)', fontWeight: '700' }}>
-                    {formatINR(Math.max(0, assetDetailModal.cost - (assetDetailModal.cost / assetDetailModal.depreciationLifeYears) * (new Date().getFullYear() - new Date(assetDetailModal.purchaseDate).getFullYear())))}
+                    {assetDetailModal.depreciationLifeYears
+                      ? formatINR(Math.max(0, assetDetailModal.cost - (assetDetailModal.cost / assetDetailModal.depreciationLifeYears) * (new Date().getFullYear() - new Date(assetDetailModal.purchaseDate).getFullYear())))
+                      : '—'}
                   </span>
                 </div>
               </div>

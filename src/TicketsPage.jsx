@@ -1335,7 +1335,7 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
                         <span style={{ color: 'var(--status-maintenance)', fontWeight: 600 }}>Mark as Private Internal staff note</span>
                       </label>
                     ) : <div />}
-                    <SpinnerButton type="submit" className="btn btn-primary" icon={Send} loading={postingComment} loadingText="Posting…">Submit Update</SpinnerButton>
+                    <SpinnerButton type="submit" className="btn btn-primary" icon={Send} loading={postingComment} loadingText="Submitting Update…">Submit Update</SpinnerButton>
                   </div>
                 </form>
               </div>

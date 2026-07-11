@@ -30,7 +30,7 @@ const validateAndFormatPhone = (phone) => {
   return { isValid: false, error: 'Invalid phone format. Indian numbers require 10 digits. International numbers must start with +.' };
 };
 
-const BulkImportModal = ({ isOpen, onClose, type, onImportComplete, isApiConnected, usersList, assetsList }) => {
+const BulkImportModal = ({ isOpen, onClose, type, onImportComplete, isApiConnected, usersList, assetsList, assetSubtypes = {} }) => {
   const [file, setFile] = useState(null);
   const [isParsing, setIsParsing] = useState(false);
   const [importSummary, setImportSummary] = useState(null);
@@ -59,10 +59,10 @@ const BulkImportModal = ({ isOpen, onClose, type, onImportComplete, isApiConnect
       XLSX.writeFile(wb, "employees_import_template.xlsx");
     } else if (type === 'assets') {
       const headers = [
-        ["Asset ID", "Asset Name", "Category", "Brand", "Model", "Serial Number", "Quantity", "Unit", "Purchase Date", "Purchase Cost", "Supplier", "Warranty Expiry", "Location", "Status"],
-        ["AST-201", "MacBook Pro 16", "IT", "Apple", "M3 Max 16-inch", "C02F87DKMD6R", "10", "pcs", "2026-06-10", "2400.00", "Apple Business", "2027-06-10", "New York HQ", "Available"],
-        ["AST-202", "Herman Miller Chair", "Office", "Herman Miller", "Aeron Size B", "HM-AER-98273", "50", "pcs", "2026-05-18", "1200.00", "OfficeSolutions", "2031-05-18", "London HQ", "Available"],
-        ["AST-203", "Dell IPS Monitor 24", "IT", "Dell", "U2412M", "CN-0V2D6M-89102", "15", "pcs", "2026-04-20", "220.00", "TechDistributors", "2029-04-20", "London HQ", "Available"]
+        ["Asset ID", "Asset Name", "Category", "Asset Tag Subtype", "Brand", "Model", "Serial Number", "Quantity", "Unit", "Purchase Date", "Purchase Cost", "Supplier", "Warranty Expiry", "Department", "Associate Department", "Location", "Useful Lifespan", "Status"],
+        ["AST-201", "MacBook Pro 16", "IT", "Laptop", "Apple", "M3 Max 16-inch", "C02F87DKMD6R", "10", "pcs", "2026-06-10", "2400.00", "Apple Business", "2027-06-10", "Engineering", "IT", "New York HQ", "5", "Available"],
+        ["AST-202", "Herman Miller Chair", "Office", "Chair", "Herman Miller", "Aeron Size B", "HM-AER-98273", "50", "pcs", "2026-05-18", "1200.00", "OfficeSolutions", "2031-05-18", "Operations", "Facilities", "London HQ", "10", "Available"],
+        ["AST-203", "Dell IPS Monitor 24", "IT", "Monitor", "Dell", "U2412M", "CN-0V2D6M-89102", "15", "pcs", "2026-04-20", "220.00", "TechDistributors", "2029-04-20", "Engineering", "", "London HQ", "", "Available"]
       ];
       const ws = XLSX.utils.aoa_to_sheet(headers);
       const wb = XLSX.utils.book_new();
@@ -253,22 +253,34 @@ const BulkImportModal = ({ isOpen, onClose, type, onImportComplete, isApiConnect
           }
         } else if (type === 'assets') {
           // Asset bulk import
-          const mappedAssets = rows.map((row) => ({
-            assetId: String(row['Asset ID'] || row['assetId'] || row['id'] || row['ID'] || '').trim(),
-            name: String(row['Asset Name'] || row['name'] || row['AssetName'] || '').trim(),
-            category: String(row['Category'] || row['category'] || 'IT').trim(),
-            brand: String(row['Brand'] || row['brand'] || '').trim(),
-            model: String(row['Model'] || row['model'] || '').trim(),
-            serialNumber: row['Serial Number'] || row['serialNumber'] || row['serial_number'] ? String(row['Serial Number'] || row['serialNumber'] || row['serial_number']).trim() : null,
-            quantity: parseInt(row['Quantity'] || row['quantity']) || 1,
-            unit: String(row['Unit'] || row['unit'] || 'pcs').trim(),
-            purchaseDate: row['Purchase Date'] || row['purchaseDate'] || null,
-            purchaseCost: parseFloat(row['Purchase Cost'] || row['purchaseCost'] || row['cost']) || 0,
-            supplier: String(row['Supplier'] || row['supplier'] || '').trim(),
-            warrantyExpiry: row['Warranty Expiry'] || row['warrantyExpiry'] || null,
-            location: String(row['Location'] || row['location'] || '').trim(),
-            status: String(row['Status'] || row['status'] || 'Available').trim()
-          }));
+          const mappedAssets = rows.map((row) => {
+            const rawLifespan = row['Useful Lifespan'] ?? row['usefulLifespan'] ?? row['Useful Life'] ?? row['depreciationLifeYears'];
+            return {
+              assetId: String(row['Asset ID'] || row['assetId'] || row['id'] || row['ID'] || '').trim(),
+              name: String(row['Asset Name'] || row['name'] || row['AssetName'] || '').trim(),
+              category: String(row['Category'] || row['category'] || 'IT').trim(),
+              // Asset Tag Subtype (a.k.a. Item Type) — driven by master data, no longer
+              // derived from the category.
+              type: String(row['Asset Tag Subtype'] || row['Item Type'] || row['Type'] || row['type'] || row['Subtype'] || '').trim(),
+              brand: String(row['Brand'] || row['brand'] || '').trim(),
+              model: String(row['Model'] || row['model'] || '').trim(),
+              serialNumber: row['Serial Number'] || row['serialNumber'] || row['serial_number'] ? String(row['Serial Number'] || row['serialNumber'] || row['serial_number']).trim() : null,
+              quantity: parseInt(row['Quantity'] || row['quantity']) || 1,
+              unit: String(row['Unit'] || row['unit'] || 'pcs').trim(),
+              purchaseDate: row['Purchase Date'] || row['purchaseDate'] || null,
+              purchaseCost: parseFloat(row['Purchase Cost'] || row['purchaseCost'] || row['cost']) || 0,
+              supplier: String(row['Supplier'] || row['supplier'] || '').trim(),
+              warrantyExpiry: row['Warranty Expiry'] || row['warrantyExpiry'] || null,
+              department: String(row['Department'] || row['department'] || '').trim(),
+              associateDepartment: String(row['Associate Department'] || row['associateDepartment'] || row['associate_department'] || '').trim(),
+              // Useful Lifespan is optional — a blank cell stays null.
+              depreciationLifeYears: rawLifespan === undefined || rawLifespan === null || String(rawLifespan).trim() === ''
+                ? null
+                : parseInt(rawLifespan),
+              location: String(row['Location'] || row['location'] || '').trim(),
+              status: String(row['Status'] || row['status'] || 'Available').trim()
+            };
+          });
 
           if (isApiConnected) {
             try {
@@ -299,6 +311,16 @@ const BulkImportModal = ({ isOpen, onClose, type, onImportComplete, isApiConnect
                 rowErrs.push("Category must be 'IT' or 'Office'");
               }
 
+              // Validate the Item Type against master data (same rule as the server),
+              // when a subtype was provided and a catalogue exists for the category.
+              const validForCat = (assetSubtypes[ast.category] || []).map(s => s.toLowerCase());
+              if (ast.type && validForCat.length && !validForCat.includes(ast.type.toLowerCase())) {
+                rowErrs.push(`"${ast.type}" is not a valid Asset Tag Subtype for category "${ast.category}"`);
+              }
+              if (ast.depreciationLifeYears !== null && (Number.isNaN(ast.depreciationLifeYears) || ast.depreciationLifeYears < 0)) {
+                rowErrs.push("Useful Lifespan must be a non-negative whole number");
+              }
+
               if (rowErrs.length > 0) {
                 failed++;
                 errors.push({ row: rowNum, assetId: ast.assetId, error: rowErrs.join(', ') });
@@ -323,7 +345,7 @@ const BulkImportModal = ({ isOpen, onClose, type, onImportComplete, isApiConnect
                 id: ast.assetId,
                 name: ast.name,
                 category: ast.category,
-                type: ast.category === 'IT' ? 'Laptops' : 'Chairs',
+                type: ast.type,
                 brand: ast.brand,
                 model: ast.model,
                 serialNumber: ast.serialNumber,
@@ -335,6 +357,9 @@ const BulkImportModal = ({ isOpen, onClose, type, onImportComplete, isApiConnect
                 cost: ast.purchaseCost,
                 supplier: ast.supplier,
                 warrantyExpiry: ast.warrantyExpiry,
+                department: ast.department,
+                associateDepartment: ast.associateDepartment,
+                depreciationLifeYears: ast.depreciationLifeYears,
                 location: ast.location,
                 status: ast.status,
                 assignedEmployee: '',
