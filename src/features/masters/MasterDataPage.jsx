@@ -130,36 +130,39 @@ function MasterList({ title, noun, listFn, createFn, updateFn, deleteFn, canCrea
       )}
 
       {!loading && !error && rows && rows.length > 0 && (
-        <div className="hbar-list">
+        <div className="master-list">
           {rows.map((row) => (
-            <div key={row.id} className="hbar-row" style={{ alignItems: 'center', opacity: row.isActive ? 1 : 0.55 }}>
+            <div key={row.id} className="master-row" style={{ opacity: row.isActive ? 1 : 0.6 }}>
               {editingId === row.id ? (
                 <>
                   <input className="form-input form-input-sm" value={editName} autoFocus
                     onChange={(e) => setEditName(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') saveRename(row); if (e.key === 'Escape') setEditingId(null); }}
-                    style={{ flex: 1 }} />
-                  <button className="btn btn-secondary btn-sm" title="Save" onClick={() => saveRename(row)}><Check size={14} /></button>
-                  <button className="btn btn-secondary btn-sm" title="Cancel" onClick={() => setEditingId(null)}><X size={14} /></button>
+                    onKeyDown={(e) => { if (e.key === 'Enter') saveRename(row); if (e.key === 'Escape') setEditingId(null); }} />
+                  <div className="master-row-actions">
+                    <button className="btn btn-secondary btn-sm" title="Save" onClick={() => saveRename(row)}><Check size={14} /></button>
+                    <button className="btn btn-secondary btn-sm" title="Cancel" onClick={() => setEditingId(null)}><X size={14} /></button>
+                  </div>
                 </>
               ) : (
                 <>
-                  <span className="hbar-label" style={{ flex: 1 }}>
+                  <span className="master-row-name">
                     {row.name}
                     {!row.isActive && <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: '8px' }}>(archived)</span>}
                   </span>
-                  {canEdit && row.isActive && (
-                    <button className="btn btn-secondary btn-sm" title="Rename" onClick={() => { setEditingId(row.id); setEditName(row.name); }}><Pencil size={13} /></button>
-                  )}
-                  {canDelete && row.isActive && (
-                    <button className="btn btn-secondary btn-sm" title="Archive (hide from pickers, keep history)" style={{ color: 'var(--status-maintenance)' }} onClick={() => archive(row)}><Archive size={13} /></button>
-                  )}
-                  {canEdit && !row.isActive && (
-                    <button className="btn btn-secondary btn-sm" title="Restore" onClick={() => restore(row)}><RotateCcw size={13} /></button>
-                  )}
-                  {canDelete && (
-                    <button className="btn btn-secondary btn-sm" title="Delete permanently (only if unused)" style={{ color: 'var(--status-disposed)' }} onClick={() => remove(row)}><Trash2 size={13} /></button>
-                  )}
+                  <div className="master-row-actions">
+                    {canEdit && row.isActive && (
+                      <button className="btn btn-secondary btn-sm" title="Rename" onClick={() => { setEditingId(row.id); setEditName(row.name); }}><Pencil size={13} /></button>
+                    )}
+                    {canDelete && row.isActive && (
+                      <button className="btn btn-secondary btn-sm" title="Archive (hide from pickers, keep history)" style={{ color: 'var(--status-maintenance)' }} onClick={() => archive(row)}><Archive size={13} /></button>
+                    )}
+                    {canEdit && !row.isActive && (
+                      <button className="btn btn-secondary btn-sm" title="Restore" onClick={() => restore(row)}><RotateCcw size={13} /></button>
+                    )}
+                    {canDelete && (
+                      <button className="btn btn-secondary btn-sm" title="Delete permanently (only if unused)" style={{ color: 'var(--status-disposed)' }} onClick={() => remove(row)}><Trash2 size={13} /></button>
+                    )}
+                  </div>
                 </>
               )}
             </div>

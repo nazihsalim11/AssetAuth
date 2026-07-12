@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
+import { AnimatePresence } from 'framer-motion'
 import Modal from '../../Modal'
 import CustomSelect from '../../CustomSelect'
+import FloatingBulkBar from '../../FloatingBulkBar'
 import { SpinnerButton } from '../../SpinnerButton'
 import { api } from '../../api'
 import { ROLE_OPTIONS } from '../../permissions'
 import { validateAndFormatPhone } from '../../utils/format'
-import { Search, Edit2, Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Search, Edit2, Trash2, ChevronLeft, ChevronRight, Layers, RefreshCw, Check, KeyRound, Download } from 'lucide-react'
 
 const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImportClick, addToast, onUsersDeleted, departments = [], canManage = false }) => {
   const [formUsername, setFormUsername] = useState('');
@@ -59,11 +61,13 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
   const [editSuccess, setEditSuccess] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
 
-  // Bulk Edit drop downs
-  const [bulkDeptValue, setBulkDeptValue] = useState('IT');
-  const [showBulkDept, setShowBulkDept] = useState(false);
-  const [bulkRoleValue, setBulkRoleValue] = useState('Employee');
-  const [showBulkRole, setShowBulkRole] = useState(false);
+  // Bulk edit — staged field values (nothing is committed until Apply Changes), matching
+  // the Support Tickets bulk bar. Empty means "leave unchanged".
+  const [bulkStatusVal, setBulkStatusVal] = useState('');
+  const [bulkDeptValue, setBulkDeptValue] = useState('');
+  const [bulkRoleValue, setBulkRoleValue] = useState('');
+  const [isApplyingBulk, setIsApplyingBulk] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState(null);
 
   // Reset page & selections on filter changes
   useEffect(() => {
@@ -280,21 +284,10 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
       const deletedUsers = usersList.filter(u => selectedUserIds.includes(u.id));
       setUsersList(prev => prev.filter(u => !selectedUserIds.includes(u.id)));
       await onUsersDeleted?.(deletedUsers);
+      addToast?.('Users deleted', `Deleted ${deletedUsers.length} user${deletedUsers.length === 1 ? '' : 's'}.`, 'success');
       setSelectedUserIds([]);
     } catch (err) {
-      alert(err.message || 'Bulk deletion failed.');
-    }
-  };
-
-  const handleBulkStatusChange = async (status) => {
-    try {
-      if (isApiConnected) {
-        await api.bulkUpdateUsersStatus(selectedUserIds, status);
-      }
-      setUsersList(prev => prev.map(u => selectedUserIds.includes(u.id) ? { ...u, status } : u));
-      setSelectedUserIds([]);
-    } catch (err) {
-      alert(err.message || 'Bulk status update failed.');
+      addToast?.('Deletion failed', err.message || 'Bulk deletion failed.', 'error');
     }
   };
 
@@ -304,36 +297,90 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
       if (isApiConnected) {
         await api.bulkResetUsersPassword(selectedUserIds);
       }
-      alert('Password has been successfully reset to "Welcome@123" for selected users.');
+      addToast?.('Passwords reset', 'Password reset to "Welcome@123" for the selected users.', 'success');
       setSelectedUserIds([]);
     } catch (err) {
-      alert(err.message || 'Bulk password reset failed.');
+      addToast?.('Reset failed', err.message || 'Bulk password reset failed.', 'error');
     }
   };
 
-  const handleBulkDeptChange = async () => {
-    try {
-      if (isApiConnected) {
-        await api.bulkUpdateUsersDepartment(selectedUserIds, bulkDeptValue);
-      }
-      setUsersList(prev => prev.map(u => selectedUserIds.includes(u.id) ? { ...u, department: bulkDeptValue } : u));
-      setSelectedUserIds([]);
-      setShowBulkDept(false);
-    } catch (err) {
-      alert(err.message || 'Bulk department update failed.');
+  /**
+   * Everything the user has staged, in the order it will be applied. Mirrors the Support
+   * Tickets bulk bar: each field's change carries the API call (`run`) and the matching
+   * local-state update (`apply`), so nothing is committed until Apply Changes is pressed.
+   */
+  const getPendingBulkChanges = () => {
+    const changes = [];
+    if (bulkStatusVal) {
+      changes.push({
+        field: 'Status',
+        value: bulkStatusVal === 'Active' ? 'Activate' : 'Deactivate',
+        run: () => api.bulkUpdateUsersStatus(selectedUserIds, bulkStatusVal),
+        apply: () => setUsersList(prev => prev.map(u => selectedUserIds.includes(u.id) ? { ...u, status: bulkStatusVal } : u)),
+      });
     }
+    if (bulkDeptValue) {
+      changes.push({
+        field: 'Department',
+        value: bulkDeptValue,
+        run: () => api.bulkUpdateUsersDepartment(selectedUserIds, bulkDeptValue),
+        apply: () => setUsersList(prev => prev.map(u => selectedUserIds.includes(u.id) ? { ...u, department: bulkDeptValue } : u)),
+      });
+    }
+    if (bulkRoleValue) {
+      changes.push({
+        field: 'Role',
+        value: bulkRoleValue,
+        run: () => api.bulkUpdateUsersRole(selectedUserIds, bulkRoleValue),
+        apply: () => setUsersList(prev => prev.map(u => selectedUserIds.includes(u.id) ? { ...u, role: bulkRoleValue } : u)),
+      });
+    }
+    return changes;
   };
 
-  const handleBulkRoleChange = async () => {
+  const clearBulkFields = () => {
+    setBulkStatusVal('');
+    setBulkDeptValue('');
+    setBulkRoleValue('');
+  };
+
+  /**
+   * Applies every staged change to the selection in one workflow. Sequential so the
+   * progress readout is meaningful; a partial failure keeps the selection and the staged
+   * values so the user can see what did not land and retry it.
+   */
+  const handleApplyBulkChanges = async () => {
+    const changes = getPendingBulkChanges();
+    if (changes.length === 0 || isApplyingBulk) return;
+
+    setIsApplyingBulk(true);
+    const failures = [];
     try {
-      if (isApiConnected) {
-        await api.bulkUpdateUsersRole(selectedUserIds, bulkRoleValue);
+      for (let i = 0; i < changes.length; i += 1) {
+        const change = changes[i];
+        setBulkProgress({ done: i, total: changes.length, field: change.field });
+        try {
+          if (isApiConnected) await change.run();
+          change.apply();
+        } catch (err) {
+          failures.push(`${change.field}: ${err.message}`);
+        }
       }
-      setUsersList(prev => prev.map(u => selectedUserIds.includes(u.id) ? { ...u, role: bulkRoleValue } : u));
-      setSelectedUserIds([]);
-      setShowBulkRole(false);
-    } catch (err) {
-      alert(err.message || 'Bulk role update failed.');
+
+      const applied = changes.length - failures.length;
+      const userCount = selectedUserIds.length;
+      if (failures.length === 0) {
+        addToast?.('Changes applied', `${applied} change${applied === 1 ? '' : 's'} applied to ${userCount} user${userCount === 1 ? '' : 's'}.`, 'success');
+        clearBulkFields();
+        setSelectedUserIds([]);
+      } else if (applied > 0) {
+        addToast?.('Partially applied', `${applied} of ${changes.length} applied. Failed — ${failures.join('; ')}`, 'error');
+      } else {
+        addToast?.('Nothing applied', failures.join('; '), 'error');
+      }
+    } finally {
+      setIsApplyingBulk(false);
+      setBulkProgress(null);
     }
   };
 
@@ -381,6 +428,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
   const startIndex = (currentPage - 1) * pageSize;
   const visibleUsers = filteredUsers.slice(startIndex, startIndex + pageSize);
   const visibleUserIds = visibleUsers.map(u => u.id);
+  const pendingBulkChanges = getPendingBulkChanges();
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', width: '100%' }}>
@@ -474,56 +522,98 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
           </div>
         </div>
 
-        {/* Bulk Action Toolbar */}
-        {selectedUserIds.length > 0 && (
-          <div className="card" style={{ padding: '12px 18px', marginBottom: '16px', background: 'rgba(99, 44, 237, 0.1)', border: '1px solid rgba(99, 44, 237, 0.3)', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: '13px', fontWeight: '600' }}>
-              {selectedUserIds.length} user{selectedUserIds.length > 1 ? 's' : ''} selected
-            </span>
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-              {canManage && (<>
-              <SpinnerButton className="btn btn-secondary btn-sm" onClick={() => handleBulkStatusChange('Active')} loadingText="Working…">Activate</SpinnerButton>
-              <SpinnerButton className="btn btn-secondary btn-sm" onClick={() => handleBulkStatusChange('Inactive')} loadingText="Working…">Deactivate</SpinnerButton>
-              <SpinnerButton className="btn btn-secondary btn-sm" onClick={handleBulkResetPassword} loadingText="Resetting…">Reset Pass</SpinnerButton>
+        {/* Floating Bulk Action Toolbar — same interaction model as Support Tickets:
+            stage Status / Department / Role, review, then commit with one Apply Changes. */}
+        <AnimatePresence>
+          {selectedUserIds.length > 0 && (
+            <FloatingBulkBar
+              onClear={() => { clearBulkFields(); setSelectedUserIds([]); }}
+              summary={
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderRight: '1px solid var(--border-color)', paddingRight: '16px' }}>
+                  <Layers size={18} style={{ color: 'var(--primary)' }} />
+                  <span style={{ fontWeight: 600, fontSize: '14px', whiteSpace: 'nowrap' }}>
+                    {selectedUserIds.length} selected
+                  </span>
+                </div>
+              }
+              actions={
+                <>
+                  {canManage && (
+                    <div className="action-row">
+                      <CustomSelect className="form-input-sm" style={{ width: '140px' }}
+                        value={bulkStatusVal} onChange={e => setBulkStatusVal(e.target.value)} disabled={isApplyingBulk}
+                        placeholder="Status…"
+                        options={[{ value: '', label: 'Status…' }, { value: 'Active', label: 'Activate' }, { value: 'Inactive', label: 'Deactivate' }]} />
 
-              {/* Bulk Dept */}
-              <div style={{ position: 'relative', display: 'inline-block' }}>
-                <button className="btn btn-secondary btn-sm" onClick={() => setShowBulkDept(!showBulkDept)}>Dept ▾</button>
-                {showBulkDept && (
-                  <div className="card" style={{ position: 'absolute', bottom: '100%', left: 0, zIndex: 10, padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px', width: '180px', marginBottom: '4px' }}>
-                    <CustomSelect 
-                      options={departments.map(d => ({ value: d, label: d }))} 
-                      value={bulkDeptValue} 
-                      onChange={e => setBulkDeptValue(e.target.value)}
-                    />
-                    <SpinnerButton className="btn btn-primary btn-sm" onClick={handleBulkDeptChange} loadingText="Applying…">Apply</SpinnerButton>
-                  </div>
-                )}
-              </div>
+                      <CustomSelect className="form-input-sm" style={{ width: '150px' }} searchable
+                        value={bulkDeptValue} onChange={e => setBulkDeptValue(e.target.value)} disabled={isApplyingBulk}
+                        placeholder="Department…"
+                        options={[{ value: '', label: 'Department…' }, ...departments.map(d => ({ value: d, label: d }))]} />
 
-              {/* Bulk Role */}
-              <div style={{ position: 'relative', display: 'inline-block' }}>
-                <button className="btn btn-secondary btn-sm" onClick={() => setShowBulkRole(!showBulkRole)}>Role ▾</button>
-                {showBulkRole && (
-                  <div className="card" style={{ position: 'absolute', bottom: '100%', left: 0, zIndex: 10, padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px', width: '180px', marginBottom: '4px' }}>
-                    <CustomSelect 
-                      options={ROLE_OPTIONS} 
-                      value={bulkRoleValue} 
-                      onChange={e => setBulkRoleValue(e.target.value)}
-                    />
-                    <SpinnerButton className="btn btn-primary btn-sm" onClick={handleBulkRoleChange} loadingText="Applying…">Apply</SpinnerButton>
-                  </div>
-                )}
-              </div>
-              </>)}
+                      <CustomSelect className="form-input-sm" style={{ width: '150px' }}
+                        value={bulkRoleValue} onChange={e => setBulkRoleValue(e.target.value)} disabled={isApplyingBulk}
+                        placeholder="Role…"
+                        options={[{ value: '', label: 'Role…' }, ...ROLE_OPTIONS]} />
+                    </div>
+                  )}
 
-              <button className="btn btn-secondary btn-sm" onClick={handleExportSelected}>Export CSV</button>
-              {canManage && (
-                <SpinnerButton className="btn btn-secondary btn-sm" style={{ color: 'var(--status-disposed)'}} onClick={handleBulkDelete} loadingText="Deleting…">Delete</SpinnerButton>
-              )}
-            </div>
-          </div>
-        )}
+                  {/* Review: exactly what Apply Changes will do. */}
+                  {pendingBulkChanges.length > 0 && (
+                    <div className="bulk-pending" role="status" aria-live="polite">
+                      {pendingBulkChanges.map(c => (
+                        <span key={c.field} className="bulk-pending-chip">
+                          {c.field} <strong>{c.value}</strong>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {canManage && (
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={handleApplyBulkChanges}
+                      disabled={pendingBulkChanges.length === 0 || isApplyingBulk}
+                      aria-busy={isApplyingBulk}
+                    >
+                      {isApplyingBulk ? (
+                        <>
+                          <RefreshCw size={13} className="animate-spin" />
+                          {bulkProgress
+                            ? `Applying ${Math.min(bulkProgress.done + 1, bulkProgress.total)} of ${bulkProgress.total}…`
+                            : 'Applying…'}
+                        </>
+                      ) : (
+                        <>
+                          <Check size={13} />
+                          Apply Changes{pendingBulkChanges.length > 0 ? ` (${pendingBulkChanges.length})` : ''}
+                        </>
+                      )}
+                    </button>
+                  )}
+
+                  {canManage && (
+                    <button className="btn btn-secondary btn-sm" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                      onClick={handleBulkResetPassword} disabled={isApplyingBulk}>
+                      <KeyRound size={13} /> Reset Password
+                    </button>
+                  )}
+
+                  <button className="btn btn-secondary btn-sm" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                    onClick={handleExportSelected} disabled={isApplyingBulk}>
+                    <Download size={13} /> Export CSV
+                  </button>
+
+                  {canManage && (
+                    <button className="btn btn-danger btn-sm" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                      onClick={handleBulkDelete} disabled={isApplyingBulk}>
+                      <Trash2 size={13} /> Delete
+                    </button>
+                  )}
+                </>
+              }
+            />
+          )}
+        </AnimatePresence>
 
         <div className="table-container">
           <table className="data-table">

@@ -1683,6 +1683,59 @@ select.form-input {
   color: var(--text-primary);
 }
 
+/* ---- Master-data list (Departments / Locations) ----
+   A compact, single-line row per record: the name takes the free space and the
+   actions stay grouped and vertically centred on the right. Every row is the same
+   height regardless of how many action buttons it carries, so the list stays scannable
+   and short. Deliberately NOT the .hbar-row grid, which is shaped for chart bars. */
+.master-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.master-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  min-height: 40px;
+  padding: 4px 6px 4px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+
+.master-row-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.master-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* Compact square icon button for the row actions. */
+.master-row-actions .btn {
+  padding: 5px 7px;
+  line-height: 0;
+}
+
+/* Inline rename input shares the row so editing never changes the row height. */
+.master-row .form-input-sm {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 /* ---- Vertical bar chart ---- */
 .chart-container {
   display: flex;
