@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useCallback, lazy, Suspense } from 
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { silk } from './engine/motion'
-import { openStoredFile } from './files'
 import Modal from './Modal'
 import {
   LayoutDashboard,
@@ -16,15 +15,9 @@ import {
   ShieldCheck,
   Bell,
   Search,
-  Plus,
-  Eye,
-  Edit2,
   Trash2,
-  ArrowLeftRight,
   AlertTriangle,
   X,
-  Download,
-  FileUp,
   Mail,
   Sun,
   Moon,
@@ -57,11 +50,8 @@ import { formatINR } from './utils/format'
 // above) because it is the default landing view.
 const KnowledgeBasePage = lazy(() => import('./KnowledgeBasePage'))
 const EmailInboxModule = lazy(() => import('./EmailInboxModule'))
-const PurchaseOrdersPage = lazy(() => import('./PurchaseOrdersPage'))
-const EmployeeAssetLookup = lazy(() => import('./EmployeeAssetLookup'))
 const TicketsPage = lazy(() => import('./TicketsPage'))
 const SlaManagementPage = lazy(() => import('./SlaManagementPage'))
-const ReportsCenter = lazy(() => import('./ReportsCenter'))
 const QRCodeSticker = lazy(() => import('./features/assets/QRCodeSticker'))
 const UserManagementPage = lazy(() => import('./features/users/UserManagementPage'))
 const QrLookupPage = lazy(() => import('./features/qrLookup/QrLookupPage'))
