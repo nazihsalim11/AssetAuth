@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import Modal from '../../Modal'
 import CustomSelect from '../../CustomSelect'
 import { SpinnerButton } from '../../SpinnerButton'
+import { api } from '../../api'
 import { ROLE_OPTIONS } from '../../permissions'
 import { validateAndFormatPhone } from '../../utils/format'
 import { Search, Edit2, Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
@@ -133,8 +134,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
       };
 
       // Database-only: creation must go through the API. There is no local fallback.
-      const { api: apiModule } = await import('../../api');
-      const created = await apiModule.createUser(newUserPayload);
+      const created = await api.createUser(newUserPayload);
       setUsersList(prev => [created, ...prev]);
 
       setFormSuccess(`User "${formUsername.trim()}" created successfully!`);
@@ -212,8 +212,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
         updatedFields.password = editFormPassword.trim();
       }
 
-      const { api: apiModule } = await import('../../api');
-      const updated = await apiModule.updateUser(editingUser.id, updatedFields);
+      const updated = await api.updateUser(editingUser.id, updatedFields);
       setUsersList(prev => prev.map(u => u.id === editingUser.id ? updated : u));
 
       setEditSuccess('User details updated successfully!');
@@ -239,8 +238,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
     if (!window.confirm(`Are you sure you want to permanently delete user "${u.username || u.name}"?`)) return;
     try {
       if (isApiConnected) {
-        const { api: apiModule } = await import('../../api');
-        await apiModule.deleteUser(u.id);
+        await api.deleteUser(u.id);
       }
       setUsersList(prev => prev.filter(x => x.id !== u.id));
       // Deleting the user cascades its assignments away in the database; pull the
@@ -277,8 +275,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
     if (!window.confirm(`Are you sure you want to delete the ${selectedUserIds.length} selected users?`)) return;
     try {
       if (isApiConnected) {
-        const { api: apiModule } = await import('../../api');
-        await apiModule.bulkDeleteUsers(selectedUserIds);
+        await api.bulkDeleteUsers(selectedUserIds);
       }
       const deletedUsers = usersList.filter(u => selectedUserIds.includes(u.id));
       setUsersList(prev => prev.filter(u => !selectedUserIds.includes(u.id)));
@@ -292,8 +289,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
   const handleBulkStatusChange = async (status) => {
     try {
       if (isApiConnected) {
-        const { api: apiModule } = await import('../../api');
-        await apiModule.bulkUpdateUsersStatus(selectedUserIds, status);
+        await api.bulkUpdateUsersStatus(selectedUserIds, status);
       }
       setUsersList(prev => prev.map(u => selectedUserIds.includes(u.id) ? { ...u, status } : u));
       setSelectedUserIds([]);
@@ -306,8 +302,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
     if (!window.confirm(`Reset password to "Welcome@123" for ${selectedUserIds.length} selected users?`)) return;
     try {
       if (isApiConnected) {
-        const { api: apiModule } = await import('../../api');
-        await apiModule.bulkResetUsersPassword(selectedUserIds);
+        await api.bulkResetUsersPassword(selectedUserIds);
       }
       alert('Password has been successfully reset to "Welcome@123" for selected users.');
       setSelectedUserIds([]);
@@ -319,8 +314,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
   const handleBulkDeptChange = async () => {
     try {
       if (isApiConnected) {
-        const { api: apiModule } = await import('../../api');
-        await apiModule.bulkUpdateUsersDepartment(selectedUserIds, bulkDeptValue);
+        await api.bulkUpdateUsersDepartment(selectedUserIds, bulkDeptValue);
       }
       setUsersList(prev => prev.map(u => selectedUserIds.includes(u.id) ? { ...u, department: bulkDeptValue } : u));
       setSelectedUserIds([]);
@@ -333,8 +327,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
   const handleBulkRoleChange = async () => {
     try {
       if (isApiConnected) {
-        const { api: apiModule } = await import('../../api');
-        await apiModule.bulkUpdateUsersRole(selectedUserIds, bulkRoleValue);
+        await api.bulkUpdateUsersRole(selectedUserIds, bulkRoleValue);
       }
       setUsersList(prev => prev.map(u => selectedUserIds.includes(u.id) ? { ...u, role: bulkRoleValue } : u));
       setSelectedUserIds([]);
