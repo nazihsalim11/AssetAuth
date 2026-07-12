@@ -64,40 +64,10 @@ import TicketsPage from './TicketsPage'
 import SlaManagementPage from './SlaManagementPage'
 import DashboardsPanel from './DashboardsPanel'
 import ReportsCenter from './ReportsCenter'
+import { formatINR, validateAndFormatPhone } from './utils/format'
+import { clearCachedUserData } from './utils/cache'
+import { VALID_TABS } from './constants/tabs'
 import './App.css'
-
-const formatINR = (value) => {
-  const num = parseFloat(value || 0);
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    maximumFractionDigits: 2
-  }).format(num);
-};
-
-const validateAndFormatPhone = (phone) => {
-  if (!phone) return { isValid: true, value: '' };
-  const cleaned = String(phone).replace(/[\s\-\(\)]/g, '');
-  if (!cleaned) return { isValid: true, value: '' };
-
-  if (cleaned.startsWith('+')) {
-    const digitsOnly = cleaned.slice(1);
-    if (/^\d{7,15}$/.test(digitsOnly)) {
-      return { isValid: true, value: cleaned };
-    }
-    return { isValid: false, error: 'Invalid international phone format. Must be + followed by 7 to 15 digits.' };
-  }
-
-  if (/^\d{10}$/.test(cleaned)) {
-    return { isValid: true, value: '+91' + cleaned };
-  }
-
-  if (/^91\d{10}$/.test(cleaned)) {
-    return { isValid: true, value: '+' + cleaned };
-  }
-
-  return { isValid: false, error: 'Invalid phone format. Indian numbers require 10 digits. International numbers must start with +.' };
-};
 
 
 const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImportClick, addToast, onUsersDeleted, departments = [], canManage = false }) => {
@@ -1003,21 +973,8 @@ const UserManagementPage = ({ usersList, setUsersList, isApiConnected, rolePermi
 // the app is now database-only, so nothing is written here anymore. This scrubs any
 // keys an upgrading user still has in their browser — run once on load and again on
 // logout, so no previous user's data can be read out of a stale cache.
-const LEGACY_CACHE_KEYS = [
-  'db_assets', 'db_amcs', 'db_invoices', 'db_documents', 'db_movements',
-  'db_logs', 'db_notifications', 'db_emails', 'db_users', 'db_assignments',
-  'db_role_permissions', 'db_assignments_cache_version'
-];
-
-const clearCachedUserData = () => {
-  try {
-    LEGACY_CACHE_KEYS.forEach(k => localStorage.removeItem(k));
-  } catch {
-    // localStorage unavailable (private mode / disabled); nothing to clear.
-  }
-};
-
 // Purge any legacy cache the moment the module loads, before the UI renders.
+// (LEGACY_CACHE_KEYS + clearCachedUserData now live in ./utils/cache.)
 clearCachedUserData();
 
 // QR Code Sticker Renderer Component
@@ -1088,15 +1045,8 @@ const QRCodeSticker = ({ asset }) => {
   );
 };
 
-// Single source of truth for the hash routes an authenticated user can land on.
-// Both the initial-state resolver and the hashchange handler read this, so a new
-// tab can never be reachable on refresh yet silently ignored on in-app navigation
-// (which is exactly how the SLA tab regressed: it was missing from the handler's
-// copy of this list).
-const VALID_TABS = [
-  'dashboard', 'assets', 'allocations', 'amc', 'finance', 'documents',
-  'qr_lookup', 'reports', 'emails', 'users', 'tickets', 'sla', 'knowledge_base'
-];
+// VALID_TABS (the hash routes an authenticated user can land on) now lives in
+// ./constants/tabs.
 
 function App() {
   // Navigation & Auth States
