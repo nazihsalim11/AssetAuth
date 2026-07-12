@@ -1,33 +1,9 @@
 import React, { useState, useRef } from 'react';
-import { motion } from 'framer-motion';
-import { X, Download, FileUp, AlertCircle, CheckCircle2, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Download, FileUp, AlertTriangle, RefreshCw } from 'lucide-react';
 import { api } from './api';
 import Modal from './Modal';
 import { ROLE_ORDER } from './permissions';
-
-const validateAndFormatPhone = (phone) => {
-  if (!phone) return { isValid: true, value: '' };
-  const cleaned = String(phone).replace(/[\s\-\(\)]/g, '');
-  if (!cleaned) return { isValid: true, value: '' };
-
-  if (cleaned.startsWith('+')) {
-    const digitsOnly = cleaned.slice(1);
-    if (/^\d{7,15}$/.test(digitsOnly)) {
-      return { isValid: true, value: cleaned };
-    }
-    return { isValid: false, error: 'Invalid international phone format. Must be + followed by 7 to 15 digits.' };
-  }
-
-  if (/^\d{10}$/.test(cleaned)) {
-    return { isValid: true, value: '+91' + cleaned };
-  }
-
-  if (/^91\d{10}$/.test(cleaned)) {
-    return { isValid: true, value: '+' + cleaned };
-  }
-
-  return { isValid: false, error: 'Invalid phone format. Indian numbers require 10 digits. International numbers must start with +.' };
-};
+import { validateAndFormatPhone } from './utils/format';
 
 const BulkImportModal = ({ isOpen, onClose, type, onImportComplete, isApiConnected, usersList, assetsList, assetSubtypes = {} }) => {
   const [file, setFile] = useState(null);

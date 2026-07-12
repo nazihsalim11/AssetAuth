@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import {
-  Plus, Eye, MessageSquare, AlertCircle, Clock, ChevronDown, Check,
-  Trash2, Send, Paperclip, ClipboardList, Info, FileText, CheckCircle2,
-  Users, User, UserCheck, AlertTriangle, Search, Filter, ArrowLeft, RefreshCw, BookOpen, Lightbulb,
-  Layers, Building, ShieldCheck, Mail, Tag, HelpCircle
+  Plus, Eye, AlertCircle, Clock, Check,
+  Trash2, Send, Paperclip, ClipboardList, FileText, CheckCircle2,
+  Users, User, AlertTriangle, Search, ArrowLeft, RefreshCw, BookOpen, Lightbulb,
+  Layers, Building, ShieldCheck
 } from 'lucide-react';
 import { api } from './api';
 import { openStoredFile } from './files';
@@ -67,7 +67,7 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize] = useState(10);
 
   // Bulk selection
   const [selectedTicketIds, setSelectedTicketIds] = useState([]);

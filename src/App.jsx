@@ -110,7 +110,7 @@ function App() {
   const [invoiceSortField, setInvoiceSortField] = useState('id');
   const [invoiceSortOrder, setInvoiceSortOrder] = useState('desc');
   const [invoiceCurrentPage, setInvoiceCurrentPage] = useState(1);
-  const [invoiceItemsPerPage, setInvoiceItemsPerPage] = useState(10);
+  const [invoiceItemsPerPage] = useState(10);
   const [documents, setDocuments] = useState([]);
   const [movements, setMovements] = useState([]);
   const [logs, setLogs] = useState([]);
@@ -165,7 +165,6 @@ function App() {
       return next.length === prev.length ? prev : next;
     });
   }, [notifications]);
-  const [newUserRole, setNewUserRole] = useState('Employee');
 
   const [isApiConnected, setIsApiConnected] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);

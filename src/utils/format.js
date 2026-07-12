@@ -11,7 +11,7 @@ export const formatINR = (value) => {
 
 export const validateAndFormatPhone = (phone) => {
   if (!phone) return { isValid: true, value: '' };
-  const cleaned = String(phone).replace(/[\s\-\(\)]/g, '');
+  const cleaned = String(phone).replace(/[\s\-()]/g, '');
   if (!cleaned) return { isValid: true, value: '' };
 
   if (cleaned.startsWith('+')) {
