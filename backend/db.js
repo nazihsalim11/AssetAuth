@@ -183,8 +183,16 @@ async function loadFromConvex() {
     await pg.exec("SET session_replication_role = 'origin';");
   }
   
-  // Set up WebSocket subscription for real-time changes
-  setupRealtimeSync();
+  // Real-time Convex->PGlite sync keeps a live WebSocket subscription per table and
+  // re-materializes the full table on every change. That holds the whole dataset a
+  // second time (on top of PGlite) and churns memory on every write — enough to OOM a
+  // 512MB instance. On a single backend instance it is redundant (this process is the
+  // only writer, and boot already loaded current state), so allow turning it off.
+  if (process.env.DISABLE_REALTIME_SYNC === 'true') {
+    console.log('[Convex Sync] Real-time WebSocket sync disabled (DISABLE_REALTIME_SYNC=true).');
+  } else {
+    setupRealtimeSync();
+  }
 }
 
 function setupRealtimeSync() {
