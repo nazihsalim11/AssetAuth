@@ -26,13 +26,20 @@ function register(app, { JWT_SECRET }) {
   // Secure, HTTP-only session cookie carrying our own signed JWT. Shared by the
   // embedded password login and the (legacy) hosted callback so both mint identical
   // sessions.
+  //
+  // In production the frontend (e.g. Vercel) and API (e.g. Render) are on different
+  // domains, so the cookie is cross-site: it MUST be SameSite=None; Secure or the
+  // browser refuses to send it back, and the user appears logged out immediately.
+  // Locally (same-origin over http) SameSite=Lax is correct and Secure must be off.
+  const IS_PROD = process.env.NODE_ENV === 'production';
+  const AUTH_COOKIE_OPTS = {
+    httpOnly: true,
+    secure: IS_PROD,
+    sameSite: IS_PROD ? 'none' : 'lax',
+  };
+
   function setAuthCookie(res, token) {
-    res.cookie('auth_token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
-    });
+    res.cookie('auth_token', token, { ...AUTH_COOKIE_OPTS, maxAge: 24 * 60 * 60 * 1000 });
   }
 
   // The WorkOS access token is a JWT; its `sid` claim is the AuthKit session id. We
@@ -345,7 +352,7 @@ function register(app, { JWT_SECRET }) {
       }
     }
 
-    res.clearCookie('auth_token');
+    res.clearCookie('auth_token', AUTH_COOKIE_OPTS);
     res.json({ success: true, message: 'Logged out successfully.' });
   });
 }
