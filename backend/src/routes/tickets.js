@@ -140,7 +140,7 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
           await client.query(`
             INSERT INTO ticket_timeline (ticket_id, actor_name, action, detail)
             VALUES ($1, $2, 'Status Changed', $3)
-          `, [tid, user.name || user.username, `Bulk status changed from ${prev} to ${status}`]);
+          `, [tid, user.name, `Bulk status changed from ${prev} to ${status}`]);
         }
       }
       await client.query('COMMIT');
@@ -172,7 +172,7 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
           await client.query(`
             INSERT INTO ticket_timeline (ticket_id, actor_name, action, detail)
             VALUES ($1, $2, 'Priority Changed', $3)
-          `, [tid, user.name || user.username, `Bulk priority changed from ${prev} to ${priority}`]);
+          `, [tid, user.name, `Bulk priority changed from ${prev} to ${priority}`]);
         }
       }
       await client.query('COMMIT');
@@ -204,7 +204,7 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
           await client.query(`
             INSERT INTO ticket_timeline (ticket_id, actor_name, action, detail)
             VALUES ($1, $2, 'Category Changed', $3)
-          `, [tid, user.name || user.username, `Bulk category changed from ${prev} to ${category}`]);
+          `, [tid, user.name, `Bulk category changed from ${prev} to ${category}`]);
         }
       }
       await client.query('COMMIT');
@@ -236,7 +236,7 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
           await client.query(`
             INSERT INTO ticket_timeline (ticket_id, actor_name, action, detail)
             VALUES ($1, $2, 'Department Changed', $3)
-          `, [tid, user.name || user.username, `Bulk department reassigned from ${prev} to ${department}`]);
+          `, [tid, user.name, `Bulk department reassigned from ${prev} to ${department}`]);
         }
       }
       await client.query('COMMIT');
@@ -264,15 +264,15 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
       let targetId = null;
 
       if (assignToUserId) {
-        const targetUserRes = await client.query('SELECT id, name, username FROM users WHERE id = $1', [assignToUserId]);
+        const targetUserRes = await client.query('SELECT workos_user_id AS id, name FROM users WHERE workos_user_id = $1', [assignToUserId]);
         if (targetUserRes.rows.length === 0) {
           await client.query('ROLLBACK');
           return res.status(400).json({ error: 'Target user not found.' });
         }
-        targetName = targetUserRes.rows[0].name || targetUserRes.rows[0].username;
+        targetName = targetUserRes.rows[0].name;
         targetId = targetUserRes.rows[0].id;
       } else {
-        targetName = user.name || user.username;
+        targetName = user.name;
         targetId = user.id;
       }
 
@@ -281,7 +281,7 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
         await client.query(`
           INSERT INTO ticket_timeline (ticket_id, actor_name, action, detail)
           VALUES ($1, $2, 'Assigned', $3)
-        `, [tid, user.name || user.username, `Bulk assigned ticket to ${targetName}`]);
+        `, [tid, user.name, `Bulk assigned ticket to ${targetName}`]);
       }
       await client.query('COMMIT');
       res.json({ message: 'Bulk assignment updated successfully' });
@@ -445,7 +445,7 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
         RETURNING *;
       `;
       const result = await client.query(insertQuery, [
-        subject, description, department, priority, user.id, user.name || user.username, slaDeadline,
+        subject, description, department, priority, user.id, user.name, slaDeadline,
         category || 'Software', ticketType,
         sla.policyId, sla.firstResponseDue, sla.resolutionDue, branch, assetType
       ]);
@@ -463,7 +463,7 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
       await client.query(`
         INSERT INTO ticket_timeline (ticket_id, actor_name, action, detail)
         VALUES ($1, $2, 'Created', 'Ticket created by employee')
-      `, [ticket.id, user.name || user.username]);
+      `, [ticket.id, user.name]);
 
       // Automatic technician assignment, if the governing policy asks for it. Done inside
       // the same transaction so a created ticket is never briefly unassigned; the
@@ -475,7 +475,7 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
             { department }, sla.policy.auto_assign_strategy, client
           );
           if (agent) {
-            const agentName = agent.name || agent.username;
+            const agentName = agent.name;
             await client.query(
               `UPDATE tickets SET assigned_to = $1, assigned_to_name = $2, status = 'In Progress', updated_at = NOW() WHERE id = $3`,
               [agent.id, agentName, ticket.id]
@@ -499,14 +499,14 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
           await client.query(`
             INSERT INTO ticket_attachments (ticket_id, file_name, file_url, file_type, file_size, uploaded_by)
             VALUES ($1, $2, $3, $4, $5, $6)
-          `, [ticket.id, att.name, att.fileUrl, att.fileType, att.fileSize, user.name || user.username]);
+          `, [ticket.id, att.name, att.fileUrl, att.fileType, att.fileSize, user.name]);
         }
       }
 
       await client.query(`
         INSERT INTO system_logs (actor, action, detail)
         VALUES ($1, 'Ticket Creation', $2)
-      `, [user.name || user.username, `Created Ticket ${ticketId} in ${department} department`]);
+      `, [user.name, `Created Ticket ${ticketId} in ${department} department`]);
 
       await client.query('COMMIT');
 
@@ -516,7 +516,7 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
       notifications.notify('ticket.created', `ticket-created:${ticket.id}`, {
         ticketId, subject, description, department, priority,
         createdBy: user.id,
-        createdByName: user.name || user.username,
+        createdByName: user.name,
         slaDeadline
       });
 
@@ -565,12 +565,12 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
         INSERT INTO ticket_comments (ticket_id, author_name, author_id, comment_text, is_internal)
         VALUES ($1, $2, $3, $4, $5)
         RETURNING *;
-      `, [ticket.id, user.name || user.username, user.id, commentText, isInt]);
+      `, [ticket.id, user.name, user.id, commentText, isInt]);
 
       await db.query(`
         INSERT INTO ticket_timeline (ticket_id, actor_name, action, detail)
         VALUES ($1, $2, 'Comment Added', $3)
-      `, [ticket.id, user.name || user.username, isInt ? 'Added internal comment' : 'Added public comment']);
+      `, [ticket.id, user.name, isInt ? 'Added internal comment' : 'Added public comment']);
 
       // First response: the earliest public reply from someone other than the requester
       // stops the response-SLA clock. Internal notes and the requester's own comments do
@@ -586,7 +586,7 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
       }
 
       const notifId = `NTF-CMT-${ticket.ticket_id}-${Date.now()}`;
-      const notifText = `${user.name || user.username} commented on ticket ${ticket.ticket_id}`;
+      const notifText = `${user.name} commented on ticket ${ticket.ticket_id}`;
       await db.query(`
         INSERT INTO notifications (id, text, type, read)
         VALUES ($1, $2, 'info', FALSE)
@@ -620,14 +620,14 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
       let targetId = null;
 
       if (assignToUserId) {
-        const targetUserRes = await db.query('SELECT id, name, username FROM users WHERE id = $1', [assignToUserId]);
+        const targetUserRes = await db.query('SELECT workos_user_id AS id, name FROM users WHERE workos_user_id = $1', [assignToUserId]);
         if (targetUserRes.rows.length === 0) {
           return res.status(400).json({ error: 'Target user not found.' });
         }
-        targetName = targetUserRes.rows[0].name || targetUserRes.rows[0].username;
+        targetName = targetUserRes.rows[0].name;
         targetId = targetUserRes.rows[0].id;
       } else {
-        targetName = user.name || user.username;
+        targetName = user.name;
         targetId = user.id;
       }
 
@@ -645,12 +645,12 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
       await db.query(`
         INSERT INTO ticket_timeline (ticket_id, actor_name, action, detail)
         VALUES ($1, $2, 'Assigned', $3)
-      `, [ticket.id, user.name || user.username, isReassignment ? `Reassigned ticket from ${ticket.assigned_to_name || 'previous agent'} to ${targetName}` : `Assigned ticket to ${targetName}`]);
+      `, [ticket.id, user.name, isReassignment ? `Reassigned ticket from ${ticket.assigned_to_name || 'previous agent'} to ${targetName}` : `Assigned ticket to ${targetName}`]);
 
       await db.query(`
         INSERT INTO system_logs (actor, action, detail)
         VALUES ($1, 'Ticket Assignment', $2)
-      `, [user.name || user.username, `Assigned Ticket ${ticket.ticket_id} to ${targetName}`]);
+      `, [user.name, `Assigned Ticket ${ticket.ticket_id} to ${targetName}`]);
 
       // Keyed on the assignee so a reassignment notifies afresh, but assigning the
       // same person twice does not.
@@ -676,7 +676,7 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
           previousAssigneeName: ticket.assigned_to_name,
           assignedTo: targetId,
           assignedToName: targetName,
-          actorName: user.name || user.username
+          actorName: user.name
         });
       }
 
@@ -730,12 +730,12 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
       await db.query(`
         INSERT INTO ticket_timeline (ticket_id, actor_name, action, detail)
         VALUES ($1, $2, 'Status Changed', $3)
-      `, [ticket.id, user.name || user.username, `Status changed from ${prevStatus} to ${status}`]);
+      `, [ticket.id, user.name, `Status changed from ${prevStatus} to ${status}`]);
 
       await db.query(`
         INSERT INTO system_logs (actor, action, detail)
         VALUES ($1, 'Ticket Status Update', $2)
-      `, [user.name || user.username, `Updated Ticket ${ticket.ticket_id} status from ${prevStatus} to ${status}`]);
+      `, [user.name, `Updated Ticket ${ticket.ticket_id} status from ${prevStatus} to ${status}`]);
 
       // Resolved and Closed are distinct events with their own wording; moving *out* of
       // either back into an active state is a reopen. Everything else is a plain status
@@ -760,7 +760,7 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
         priority: ticket.priority,
         status,
         previousStatus: prevStatus,
-        actorName: user.name || user.username,
+        actorName: user.name,
         createdBy: ticket.created_by,
         assignedTo: ticket.assigned_to,
         assignedToName: ticket.assigned_to_name
@@ -794,7 +794,7 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
       await db.query(`
         INSERT INTO ticket_timeline (ticket_id, actor_name, action, detail)
         VALUES ($1, $2, 'Priority Changed', $3)
-      `, [ticket.id, user.name || user.username, `Priority changed from ${prevPriority} to ${priority}`]);
+      `, [ticket.id, user.name, `Priority changed from ${prevPriority} to ${priority}`]);
 
       notifications.notify('ticket.priority_changed', `ticket-priority:${ticket.id}:${priority}:${Date.now()}`, {
         ticketId: ticket.ticket_id,
@@ -802,7 +802,7 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
         department: ticket.department,
         priority,
         previousPriority: prevPriority,
-        actorName: user.name || user.username,
+        actorName: user.name,
         createdBy: ticket.created_by,
         assignedTo: ticket.assigned_to,
         assignedToName: ticket.assigned_to_name
@@ -833,7 +833,7 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
       await db.query(`
         INSERT INTO ticket_timeline (ticket_id, actor_name, action, detail)
         VALUES ($1, $2, 'Category Changed', $3)
-      `, [ticket.id, user.name || user.username, `Category changed from ${prevCategory} to ${category}`]);
+      `, [ticket.id, user.name, `Category changed from ${prevCategory} to ${category}`]);
 
       res.json({ message: 'Category updated successfully', category });
     } catch (err) {
@@ -860,7 +860,7 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
       await db.query(`
         INSERT INTO ticket_timeline (ticket_id, actor_name, action, detail)
         VALUES ($1, $2, 'Department Changed', $3)
-      `, [ticket.id, user.name || user.username, `Department reassigned from ${prevDept} to ${department}`]);
+      `, [ticket.id, user.name, `Department reassigned from ${prevDept} to ${department}`]);
 
       res.json({ message: 'Department updated successfully', department });
     } catch (err) {
@@ -894,7 +894,7 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
         return res.status(400).json({ error: 'No eligible agents found for auto-assignment.' });
       }
 
-      const targetName = chosenAgent.name || chosenAgent.username;
+      const targetName = chosenAgent.name;
       const targetId = chosenAgent.id;
 
       await db.query(`
@@ -906,7 +906,7 @@ function register(app, { requireUser, requireUserWithDepartment, roleCan }) {
       await db.query(`
         INSERT INTO ticket_timeline (ticket_id, actor_name, action, detail)
         VALUES ($1, $2, 'Assigned', $3)
-      `, [ticket.id, user.name || user.username, `Auto-assigned ticket to ${targetName} (${strategy.replace('_', ' ')}, ${chosenAgent.workload} active ticket(s))`]);
+      `, [ticket.id, user.name, `Auto-assigned ticket to ${targetName} (${strategy.replace('_', ' ')}, ${chosenAgent.workload} active ticket(s))`]);
 
       notifications.notify('ticket.assigned', `ticket-assigned:${ticket.id}:${targetId}`, {
         ticketId: ticket.ticket_id,

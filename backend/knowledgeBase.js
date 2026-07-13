@@ -274,7 +274,7 @@ function register(app, { requireUser }) {
         `INSERT INTO kb_articles (slug, title, summary, body, category_id, is_faq, is_published, author_id, author_name)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
         [slug, title.trim(), summary || null, body, categoryId || null,
-         !!isFaq, !!isPublished, user.id, user.name || user.username]
+         !!isFaq, !!isPublished, user.id, user.name]
       );
       const article = rows[0];
 
@@ -283,7 +283,7 @@ function register(app, { requireUser }) {
         await client.query(
           `INSERT INTO kb_article_attachments (article_id, file_name, file_path, file_type, file_size, uploaded_by)
            VALUES ($1,$2,$3,$4,$5,$6)`,
-          [article.id, att.name, att.fileUrl, att.fileType || null, att.fileSize || null, user.name || user.username]
+          [article.id, att.name, att.fileUrl, att.fileType || null, att.fileSize || null, user.name]
         );
       }
       await client.query('COMMIT');
@@ -350,7 +350,7 @@ function register(app, { requireUser }) {
           await client.query(
             `INSERT INTO kb_article_attachments (article_id, file_name, file_path, file_type, file_size, uploaded_by)
              VALUES ($1,$2,$3,$4,$5,$6)`,
-            [id, att.name, att.fileUrl || att.file_path, att.fileType || null, att.fileSize || null, user.name || user.username]
+            [id, att.name, att.fileUrl || att.file_path, att.fileType || null, att.fileSize || null, user.name]
           );
         }
       }

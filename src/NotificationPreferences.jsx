@@ -292,7 +292,7 @@ const NotificationPreferences = ({ addToast, canManage = false }) => {
                                     borderColor: 'var(--status-available)'
                                   }}
                                 >
-                                  {u ? (u.name || u.username) : `User #${uid}`}
+                                  {u ? (u.name || u.email) : `User #${uid}`}
                                   {canManage && <X size={11} style={{ marginLeft: 4 }} />}
                                 </button>
                               );
@@ -307,7 +307,7 @@ const NotificationPreferences = ({ addToast, canManage = false }) => {
                                 style={{ width: '160px' }}
                                 options={users
                                   .filter((u) => !recipients[event]?.userIds.has(u.id))
-                                  .map((u) => ({ value: u.id, label: `${u.name || u.username} (${u.role})` }))}
+                                  .map((u) => ({ value: u.id, label: `${u.name || u.email} (${u.role})` }))}
                               />
                             )}
 

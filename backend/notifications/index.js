@@ -105,7 +105,7 @@ const ADMIN_ROLES = ['Super Admin', 'IT Admin', 'Facility Admin'];
 
 const activeUsers = async (where, params) => {
   const { rows } = await db.query(
-    `SELECT id, name, username, email, phone_number, role, department
+    `SELECT id, name, email, phone_number, role, department
      FROM users
      WHERE status = 'Active' AND (${where})`,
     params

@@ -186,23 +186,8 @@ const BulkImportModal = ({ isOpen, onClose, type, onImportComplete, isApiConnect
                 return;
               }
 
-              const baseUsername = emp.email.split('@')[0];
-              let generatedUsername = baseUsername;
-              let suffix = 1;
-              while (true) {
-                const exists = updatedUsers.some(u => String(u.username || '').toLowerCase() === generatedUsername.toLowerCase());
-                if (exists) {
-                  generatedUsername = baseUsername + suffix;
-                  suffix++;
-                  continue;
-                }
-                break;
-              }
-              const username = generatedUsername;
-
               updatedUsers.push({
                 id: Date.now() + index,
-                username,
                 name: `${emp.firstName} ${emp.lastName}`,
                 email: emp.email,
                 role: emp.role,
@@ -573,7 +558,7 @@ const BulkImportModal = ({ isOpen, onClose, type, onImportComplete, isApiConnect
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
                       <thead>
                         <tr style={{ borderBottom: '1px solid var(--border-color)', background: 'var(--bg-sidebar)', textAlign: 'left' }}>
-                          <th style={{ padding: '6px 10px', fontWeight: '600' }}>Username</th>
+                          <th style={{ padding: '6px 10px', fontWeight: '600' }}>Email</th>
                           <th style={{ padding: '6px 10px', fontWeight: '600' }}>Full Name</th>
                           <th style={{ padding: '6px 10px', fontWeight: '600' }}>Temporary Password</th>
                         </tr>
@@ -581,7 +566,7 @@ const BulkImportModal = ({ isOpen, onClose, type, onImportComplete, isApiConnect
                       <tbody>
                         {importSummary.generatedPasswords.map((p, idx) => (
                           <tr key={idx} style={{ borderBottom: idx < importSummary.generatedPasswords.length - 1 ? '1px solid var(--border-color)' : 'none' }}>
-                            <td style={{ padding: '6px 10px', fontFamily: 'var(--mono)', fontWeight: '600', color: 'var(--primary)' }}>{p.username}</td>
+                            <td style={{ padding: '6px 10px', fontFamily: 'var(--mono)', fontWeight: '600', color: 'var(--primary)' }}>{p.email}</td>
                             <td style={{ padding: '6px 10px' }}>{p.name}</td>
                             <td style={{ padding: '6px 10px', fontFamily: 'var(--mono)', color: 'var(--status-assigned)', userSelect: 'all' }}>{p.tempPassword}</td>
                           </tr>

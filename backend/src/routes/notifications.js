@@ -245,7 +245,7 @@ function register(app, { requireUser, requirePermission, authenticateRequest }) 
       notifications.invalidateSettingsCache();
       await db.query(
         `INSERT INTO system_logs (actor, action, detail) VALUES ($1, 'Notification Settings', $2)`,
-        [user.name || user.username, `Updated: ${setClauses.join(', ')}`]
+        [user.name, `Updated: ${setClauses.join(', ')}`]
       );
       res.json({ settings: result.rows[0], channels: notifications.channelStatus() });
     } catch (err) {
@@ -266,7 +266,7 @@ function register(app, { requireUser, requirePermission, authenticateRequest }) 
       const [prefs, recipients, roles] = await Promise.all([
         db.query('SELECT event_type, channel, enabled, min_priority FROM notification_preferences ORDER BY event_type, channel'),
         db.query('SELECT event_type, role, user_id FROM notification_recipients ORDER BY event_type'),
-        db.query(`SELECT id, name, username, role FROM users WHERE status = 'Active' ORDER BY name NULLS LAST, username`)
+        db.query(`SELECT workos_user_id AS id, name, email, role FROM users WHERE status = 'Active' ORDER BY name NULLS LAST, email`)
       ]);
       res.json({
         eventTypes: notifications.eventTypes,
@@ -330,7 +330,7 @@ function register(app, { requireUser, requirePermission, authenticateRequest }) 
 
       await client.query(
         `INSERT INTO system_logs (actor, action, detail) VALUES ($1, 'Notification Preferences', $2)`,
-        [user.name || user.username, `Updated ${preferences.length} preference(s), ${recipients.length} recipient rule(s)`]
+        [user.name, `Updated ${preferences.length} preference(s), ${recipients.length} recipient rule(s)`]
       );
 
       await client.query('COMMIT');

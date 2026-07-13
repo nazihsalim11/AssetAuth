@@ -5,7 +5,7 @@ import { api } from './api';
 /**
  * Employee Asset Lookup.
  *
- * Search the directory by name, employee ID, username or email, then show what the
+ * Search the directory by name, employee ID or email, then show what the
  * person currently holds and everything they have ever held.
  *
  * Both endpoints are scoped server-side: an Employee can only ever find and inspect
@@ -63,7 +63,7 @@ const EmployeeAssetLookup = ({ addToast }) => {
           <Search className="search-icon" />
           <input
             className="search-bar"
-            placeholder="Search by name, employee ID, username or email…"
+            placeholder="Search by name, employee ID or email…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -94,7 +94,7 @@ const EmployeeAssetLookup = ({ addToast }) => {
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontWeight: 600, fontSize: '13px' }}>{m.name}</div>
                     <div style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
-                      {[m.employeeId, m.username, m.email, m.department].filter(Boolean).join(' · ')}
+                      {[m.employeeId, m.email, m.department].filter(Boolean).join(' · ')}
                     </div>
                   </div>
                 </button>
@@ -210,7 +210,7 @@ const EmployeeAssetLookup = ({ addToast }) => {
             <div className="empty-state-icon"><User size={22} /></div>
             <div className="empty-state-title">Search for an employee</div>
             <div className="empty-state-desc">
-              Look someone up by name, employee ID, username or email to see the assets in their custody.
+              Look someone up by name, employee ID or email to see the assets in their custody.
             </div>
           </div>
         </div>

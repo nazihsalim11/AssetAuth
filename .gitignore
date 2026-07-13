@@ -40,3 +40,9 @@ test_tickets.cjs
 # Locally-uploaded files. In production these live in Supabase Storage.
 # (Existing committed PDFs stay tracked; this only stops new ones.)
 backend/public/uploads/
+
+# Claude Code local worktrees
+.claude/worktrees/
+
+# Generated repo dump (repomix)
+repomix-output.xml

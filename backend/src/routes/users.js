@@ -1,16 +1,37 @@
 const bcrypt = require('bcryptjs');
 const db = require('../../db');
 const notifications = require('../../notifications');
+const emailChannel = require('../../notifications/channels/email');
 const validateAndFormatPhone = require('../utils/phone');
+const { WorkOS } = require('@workos-inc/node');
+
+const workos = process.env.WORKOS_API_KEY ? new WorkOS(process.env.WORKOS_API_KEY) : null;
+
+// Starts a WorkOS-managed password reset and emails the hosted reset link. Used to let
+// newly provisioned users set their first password (WorkOS owns credentials; we never
+// set or store passwords). Best-effort: failures are logged, never thrown.
+async function sendResetLink(email) {
+  if (!workos || !email) return;
+  try {
+    const reset = await workos.userManagement.createPasswordReset({ email });
+    const resetUrl = reset && reset.passwordResetUrl;
+    if (resetUrl && emailChannel.isConfigured()) {
+      await emailChannel.send({
+        to: email,
+        subject: 'Set your AssetFlow password',
+        body: `An AssetFlow account has been created for you.\n\n`
+          + `Use the link below to set your password and sign in (it expires shortly):\n${resetUrl}\n`,
+      }).catch((e) => console.warn('[User Invite] Email send failed:', e.message));
+    } else if (resetUrl && !emailChannel.isConfigured()) {
+      console.warn('[User Invite] SMTP not configured; password setup link not delivered for', email);
+    }
+  } catch (workosErr) {
+    console.warn('[User Invite] Failed to create WorkOS password reset:', workosErr.message);
+  }
+}
 
 // Reliable user creation helper used by both manual registration and bulk import
-async function createSingleUser(client, { username, password, name, role, email, employeeId, phoneNumber, department, designation, status, resetRequired = false }) {
-  // Validate duplicate username (case-insensitive)
-  const usernameExists = await client.query('SELECT 1 FROM users WHERE LOWER(username) = LOWER($1)', [username]);
-  if (usernameExists.rows.length > 0) {
-    throw new Error(`Username '${username}' already exists. Please use a unique Username.`);
-  }
-
+async function createSingleUser(client, { workosUserId, name, role, email, employeeId, phoneNumber, department, designation, location, managerId, status }) {
   const emailExists = await client.query('SELECT 1 FROM users WHERE LOWER(email) = LOWER($1)', [email]);
   if (emailExists.rows.length > 0) {
     throw new Error(`Email '${email}' is already registered.`);
@@ -23,35 +44,34 @@ async function createSingleUser(client, { username, password, name, role, email,
     }
   }
 
-  const salt = await bcrypt.genSalt(10);
-  const passwordHash = await bcrypt.hash(password, salt);
+  let finalWorkosUserId = workosUserId;
+  if (!finalWorkosUserId) {
+    if (workos) {
+      try {
+        const workosUser = await workos.userManagement.createUser({
+          email,
+          emailVerified: true,
+          firstName: name.split(' ')[0] || '',
+          lastName: name.split(' ').slice(1).join(' ') || '',
+        });
+        finalWorkosUserId = workosUser.id;
+      } catch (workosErr) {
+        console.warn('[WorkOS User Creation Warning] Failed to create user in WorkOS:', workosErr.message);
+      }
+    }
+    if (!finalWorkosUserId) {
+      finalWorkosUserId = 'mock-' + email.split('@')[0] + '-' + Math.random().toString(36).substring(2, 7);
+    }
+  }
 
-  // 1. Generate authId
-  const { randomUUID } = require('crypto');
-  const authId = randomUUID();
-
-  // 2. Insert into auth.users
-  const rawUserMetadata = JSON.stringify({ name, role, username });
-  const authQuery = `
-    INSERT INTO auth.users (
-      id, instance_id, email, encrypted_password, aud, role, 
-      is_sso_user, is_anonymous, email_confirmed_at, 
-      raw_app_meta_data, raw_user_meta_data, created_at, updated_at
-    ) VALUES ($1, '00000000-0000-0000-0000-000000000000', $2, $3, 'authenticated', 'authenticated', 
-              false, false, NOW(), 
-              '{"provider":"email","providers":["email"]}'::jsonb, $4::jsonb, NOW(), NOW())
-  `;
-  await client.query(authQuery, [authId, email, passwordHash, rawUserMetadata]);
-
-  // 3. Insert into public.users
+  // Insert into public.users
   const query = `
-    INSERT INTO users (username, password_hash, name, role, email, employee_id, phone_number, department, designation, status, password_reset_required, auth_id)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-    RETURNING id, username, name, role, email, employee_id, phone_number, department, designation, status, password_reset_required, created_at, auth_id;
+    INSERT INTO users (workos_user_id, name, role, email, employee_id, phone_number, department, designation, location, manager_id, status)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    RETURNING workos_user_id AS id, name, role, email, employee_id, phone_number, department, designation, location, manager_id AS "managerId", status, created_at;
   `;
   const values = [
-    username,
-    passwordHash,
+    finalWorkosUserId,
     name,
     role,
     email,
@@ -59,26 +79,21 @@ async function createSingleUser(client, { username, password, name, role, email,
     phoneNumber || '',
     department || '',
     designation || '',
-    status || 'Active',
-    resetRequired,
-    authId
+    location || '',
+    managerId || null,
+    status || 'Active'
   ];
   const result = await client.query(query, values);
   return result.rows[0];
 }
 
 // --- USER MANAGEMENT API ---
-// Departments, the user directory, user CRUD and the bulk operations. Extracted
-// verbatim from server.js. createSingleUser() above is shared with manual creation.
-function register(app, { requireUser, invalidateUserRole, actorOf }) {
-  // NOTE: GET /api/departments now lives in src/routes/masters.js and is served from the
-  // departments master table (the single source of truth) rather than being derived from
-  // the user directory with a hardcoded seed fallback.
+function register(app, { requireUser, invalidateUserRole, actorOf, roleCan }) {
 
   app.get('/api/users', async (req, res) => {
     try {
       const result = await db.query(
-        'SELECT id, username, name, role, email, employee_id, phone_number, department, designation, status, created_at FROM users ORDER BY created_at DESC'
+        'SELECT workos_user_id AS id, name, role, email, employee_id, phone_number, department, designation, location, manager_id AS "managerId", status, created_at FROM users ORDER BY created_at DESC'
       );
       res.json(result.rows);
     } catch (err) {
@@ -88,9 +103,9 @@ function register(app, { requireUser, invalidateUserRole, actorOf }) {
   });
 
   app.post('/api/users', async (req, res) => {
-    const { username, password, name, role, email, employeeId, phoneNumber, department, designation, status } = req.body;
-    if (!username || !password || !name || !role || !email) {
-      return res.status(400).json({ error: 'All fields are required (username, password, name, role, email).' });
+    const { name, role, email, employeeId, phoneNumber, department, designation, location, managerId, status } = req.body;
+    if (!name || !role || !email) {
+      return res.status(400).json({ error: 'Name, role, and email are required.' });
     }
 
     // Validate phone number format
@@ -107,8 +122,6 @@ function register(app, { requireUser, invalidateUserRole, actorOf }) {
     try {
       await client.query('BEGIN');
       const createdUser = await createSingleUser(client, {
-        username,
-        password,
         name,
         role,
         email,
@@ -116,15 +129,22 @@ function register(app, { requireUser, invalidateUserRole, actorOf }) {
         phoneNumber: formattedPhone,
         department,
         designation,
+        location,
+        managerId,
         status,
-        resetRequired: false
       });
       await client.query('COMMIT');
+
+      // Email a WorkOS password-setup link so the new user can choose their password.
+      if (createdUser.id && !createdUser.id.startsWith('mock-')) {
+        await sendResetLink(createdUser.email);
+      }
+
       res.status(201).json(createdUser);
 
       notifications.notify('user.created', `user-created:${createdUser.id}`, {
-        name: createdUser.name || createdUser.username,
-        username: createdUser.username,
+        name: createdUser.name,
+        email: createdUser.email,
         role: createdUser.role,
         department: createdUser.department,
         actor: actorOf(req)
@@ -141,7 +161,7 @@ function register(app, { requireUser, invalidateUserRole, actorOf }) {
   // PATCH /api/users/:id - Edit User Details
   app.patch('/api/users/:id', async (req, res) => {
     const { id } = req.params;
-    const { name, role, email, employeeId, phoneNumber, department, designation, status, password } = req.body;
+    const { role, employeeId, phoneNumber, department, designation, location, managerId, status, notificationPreferences } = req.body;
 
     let formattedPhone = '';
     if (phoneNumber) {
@@ -157,93 +177,79 @@ function register(app, { requireUser, invalidateUserRole, actorOf }) {
       await client.query('BEGIN');
 
       // Check if user exists
-      const userResult = await client.query('SELECT * FROM users WHERE id = $1', [id]);
+      const userResult = await client.query('SELECT * FROM users WHERE workos_user_id = $1', [id]);
       if (userResult.rows.length === 0) {
         await client.query('ROLLBACK');
         return res.status(404).json({ error: 'User not found' });
       }
       const user = userResult.rows[0];
 
-      // Check duplicate email
-      let finalUsername = user.username;
-      if (email && email.toLowerCase() !== user.email?.toLowerCase()) {
-        const emailExists = await client.query('SELECT 1 FROM users WHERE LOWER(email) = LOWER($1) AND id <> $2', [email, id]);
-        if (emailExists.rows.length > 0) {
+      // Guard role changes: only a User Management editor may change someone's role,
+      // and no one may change their own role (prevents self-elevation). Other profile
+      // fields (phone, notification preferences, etc.) are unaffected.
+      if (role !== undefined && role !== null && role !== user.role) {
+        const caller = requireUser(req, res);
+        if (!caller) { await client.query('ROLLBACK'); return; }
+        if (String(caller.id) === String(id)) {
           await client.query('ROLLBACK');
-          return res.status(400).json({ error: 'Email address is already registered by another user.' });
+          return res.status(403).json({ error: 'You cannot change your own role.' });
         }
-
-        const emailParts = email.split('@');
-        finalUsername = emailParts[0];
-
-        // Check duplicate username
-        const usernameExists = await client.query('SELECT 1 FROM users WHERE LOWER(username) = LOWER($1) AND id <> $2', [finalUsername, id]);
-        if (usernameExists.rows.length > 0) {
+        if (!(await roleCan(caller, 'userManagement', 'edit'))) {
           await client.query('ROLLBACK');
-          return res.status(400).json({ error: `Username '${finalUsername}' already exists. Please use a unique Email address.` });
+          return res.status(403).json({ error: 'Your role is not permitted to change user roles.' });
         }
       }
 
       // Check duplicate employee ID
       if (employeeId && (user.employee_id === null || employeeId.toLowerCase() !== user.employee_id.toLowerCase())) {
-        const empIdExists = await client.query('SELECT 1 FROM users WHERE LOWER(employee_id) = LOWER($1) AND id <> $2', [employeeId, id]);
+        const empIdExists = await client.query('SELECT 1 FROM users WHERE LOWER(employee_id) = LOWER($1) AND workos_user_id <> $2', [employeeId, id]);
         if (empIdExists.rows.length > 0) {
           await client.query('ROLLBACK');
           return res.status(400).json({ error: `Employee ID '${employeeId}' already exists. Please use a unique Employee ID.` });
         }
       }
 
-      let passwordHash = user.password_hash;
-      if (password) {
-        const salt = await bcrypt.genSalt(10);
-        passwordHash = await bcrypt.hash(password, salt);
-      }
-
-      // Update auth.users if auth_id exists
-      if (user.auth_id) {
-        const authUpdateQuery = `
-          UPDATE auth.users
-          SET email = COALESCE($1, email),
-              encrypted_password = COALESCE($2, encrypted_password),
-              raw_user_meta_data = raw_user_meta_data || $3::jsonb,
-              updated_at = NOW()
-          WHERE id = $4
-        `;
-        const metadata = JSON.stringify({
-          name: name || user.name,
-          role: role || user.role,
-          username: finalUsername || user.username
-        });
-        await client.query(authUpdateQuery, [email || null, password ? passwordHash : null, metadata, user.auth_id]);
+      // Update WorkOS user status if changed and configured
+      if (workos && id && !id.startsWith('mock-')) {
+        if (status && status !== user.status) {
+          try {
+            if (status === 'Deactivated' || status === 'Inactive') {
+              await workos.userManagement.deactivateUser({ userId: id });
+            } else if (status === 'Active') {
+              await workos.userManagement.reactivateUser({ userId: id });
+            }
+          } catch (workosErr) {
+            console.warn('[WorkOS User Update Warning] Failed to update user status in WorkOS:', workosErr.message);
+          }
+        }
       }
 
       const query = `
         UPDATE users 
-        SET name = COALESCE($1, name),
-            role = COALESCE($2, role),
-            email = COALESCE($3, email),
-            employee_id = COALESCE($4, employee_id),
-            phone_number = COALESCE($5, phone_number),
-            department = COALESCE($6, department),
-            designation = COALESCE($7, designation),
+        SET role = COALESCE($1, role),
+            employee_id = COALESCE($2, employee_id),
+            phone_number = COALESCE($3, phone_number),
+            department = COALESCE($4, department),
+            designation = COALESCE($5, designation),
+            location = COALESCE($6, location),
+            manager_id = COALESCE($7, manager_id),
             status = COALESCE($8, status),
-            password_hash = $9,
-            username = COALESCE($11, username)
-        WHERE id = $10
-        RETURNING id, username, name, role, email, employee_id, phone_number, department, designation, status, password_reset_required, created_at;
+            notification_preferences = COALESCE($9, notification_preferences),
+            updated_at = NOW()
+        WHERE workos_user_id = $10
+        RETURNING workos_user_id AS id, name, role, email, employee_id, phone_number, department, designation, location, manager_id AS "managerId", status, notification_preferences, created_at;
       `;
       const values = [
-        name,
         role,
-        email,
         employeeId,
         formattedPhone || phoneNumber || '',
         department,
         designation,
+        location,
+        managerId,
         status,
-        passwordHash,
-        id,
-        finalUsername
+        notificationPreferences ? JSON.stringify(notificationPreferences) : null,
+        id
       ];
       const result = await client.query(query, values);
       
@@ -251,15 +257,11 @@ function register(app, { requireUser, invalidateUserRole, actorOf }) {
       const updated = result.rows[0];
       res.json(updated);
 
-      // Roles grant permissions, so a change is worth telling the admins about. Keyed
-      // on the destination role: setting the same role twice is not a second event.
       if (role && role !== user.role) {
-        // Immediacy: the next request from this user resolves the new role rather than
-        // the one baked into their JWT, so the change takes effect without a re-login.
         invalidateUserRole(updated.id);
         notifications.notify('user.role_changed', `user-role:${updated.id}:${role}`, {
-          name: updated.name || updated.username,
-          username: updated.username,
+          name: updated.name,
+          email: updated.email,
           previousRole: user.role,
           newRole: role,
           actor: actorOf(req)
@@ -280,12 +282,11 @@ function register(app, { requireUser, invalidateUserRole, actorOf }) {
     const client = await db.pool.connect();
     try {
       await client.query('BEGIN');
-      const check = await client.query('SELECT username, name, role, auth_id FROM users WHERE id = $1', [id]);
+      const check = await client.query('SELECT name, email, role FROM users WHERE workos_user_id = $1', [id]);
       if (check.rows.length === 0) {
         await client.query('ROLLBACK');
         return res.status(404).json({ error: 'User not found' });
       }
-      const { username, auth_id } = check.rows[0];
       const deletedUser = check.rows[0];
       
       // Find affected assets before deleting assignments
@@ -293,11 +294,15 @@ function register(app, { requireUser, invalidateUserRole, actorOf }) {
       const affectedAssetIds = affectedAssets.rows.map(r => r.asset_id);
 
       await client.query('DELETE FROM asset_assignments WHERE user_id = $1', [id]);
-      if (auth_id) {
-        await client.query('DELETE FROM auth.users WHERE id = $1', [auth_id]);
-      } else {
-        await client.query('DELETE FROM users WHERE id = $1', [id]);
+      if (workos && id && !id.startsWith('mock-')) {
+        try {
+          await workos.userManagement.deleteUser({ userId: id });
+        } catch (workosErr) {
+          console.warn('[WorkOS User Deletion Warning] Failed to delete user in WorkOS:', workosErr.message);
+        }
       }
+
+      await client.query('DELETE FROM users WHERE workos_user_id = $1', [id]);
 
       // Recalculate quantities for each affected asset
       for (const assetId of affectedAssetIds) {
@@ -330,11 +335,11 @@ function register(app, { requireUser, invalidateUserRole, actorOf }) {
       }
 
       await client.query('COMMIT');
-      res.json({ message: `User "${username}" deleted successfully` });
+      res.json({ message: `User "${deletedUser.name || deletedUser.email}" deleted successfully` });
 
       notifications.notify('user.deleted', `user-deleted:${id}`, {
-        name: deletedUser.name || deletedUser.username,
-        username: deletedUser.username,
+        name: deletedUser.name,
+        email: deletedUser.email,
         role: deletedUser.role,
         actor: actorOf(req)
       });
@@ -356,19 +361,27 @@ function register(app, { requireUser, invalidateUserRole, actorOf }) {
     const client = await db.pool.connect();
     try {
       await client.query('BEGIN');
-      const check = await client.query('SELECT auth_id, id FROM users WHERE id = ANY($1::int[])', [userIds]);
-      const authIds = check.rows.map(r => r.auth_id).filter(Boolean);
-      const foundIds = check.rows.map(r => r.id);
+      const check = await client.query('SELECT workos_user_id FROM users WHERE workos_user_id = ANY($1::varchar[])', [userIds]);
+      const foundIds = check.rows.map(r => r.workos_user_id);
       
       // Find affected assets before deleting assignments
-      const affectedAssets = await client.query('SELECT DISTINCT asset_id FROM asset_assignments WHERE user_id = ANY($1::int[])', [foundIds]);
+      const affectedAssets = await client.query('SELECT DISTINCT asset_id FROM asset_assignments WHERE user_id = ANY($1::varchar[])', [foundIds]);
       const affectedAssetIds = affectedAssets.rows.map(r => r.asset_id);
 
-      await client.query('DELETE FROM asset_assignments WHERE user_id = ANY($1::int[])', [foundIds]);
-      if (authIds.length > 0) {
-        await client.query('DELETE FROM auth.users WHERE id = ANY($1::uuid[])', [authIds]);
+      await client.query('DELETE FROM asset_assignments WHERE user_id = ANY($1::varchar[])', [foundIds]);
+      if (workos) {
+        for (const wId of foundIds) {
+          if (!wId.startsWith('mock-')) {
+            try {
+              await workos.userManagement.deleteUser({ userId: wId });
+            } catch (workosErr) {
+              console.warn('[WorkOS User Deletion Warning] Failed to delete user in WorkOS:', workosErr.message);
+            }
+          }
+        }
       }
-      await client.query('DELETE FROM users WHERE id = ANY($1::int[])', [foundIds]);
+
+      await client.query('DELETE FROM users WHERE workos_user_id = ANY($1::varchar[])', [foundIds]);
       
       // Recalculate quantities for each affected asset
       for (const assetId of affectedAssetIds) {
@@ -418,7 +431,22 @@ function register(app, { requireUser, invalidateUserRole, actorOf }) {
       return res.status(400).json({ error: 'Payload must contain userIds array and status' });
     }
     try {
-      await db.query('UPDATE users SET status = $1 WHERE id = ANY($2::int[])', [status, userIds]);
+      if (workos) {
+        for (const wId of userIds) {
+          if (!wId.startsWith('mock-')) {
+            try {
+              if (status === 'Deactivated' || status === 'Inactive') {
+                await workos.userManagement.deactivateUser({ userId: wId });
+              } else if (status === 'Active') {
+                await workos.userManagement.reactivateUser({ userId: wId });
+              }
+            } catch (workosErr) {
+              console.warn(`Failed to update status in WorkOS for user ${wId}:`, workosErr.message);
+            }
+          }
+        }
+      }
+      await db.query('UPDATE users SET status = $1 WHERE workos_user_id = ANY($2::varchar[])', [status, userIds]);
       res.json({ message: `Status updated to "${status}" for ${userIds.length} users` });
     } catch (err) {
       console.error(err);
@@ -433,10 +461,13 @@ function register(app, { requireUser, invalidateUserRole, actorOf }) {
       return res.status(400).json({ error: 'Payload must contain a userIds array' });
     }
     try {
-      const salt = await bcrypt.genSalt(10);
-      const passwordHash = await bcrypt.hash('Welcome@123', salt);
-      await db.query('UPDATE users SET password_hash = $1 WHERE id = ANY($2::int[])', [passwordHash, userIds]);
-      res.json({ message: `Password reset to "Welcome@123" for ${userIds.length} users` });
+      if (workos) {
+        const { rows } = await db.query('SELECT email FROM users WHERE workos_user_id = ANY($1::varchar[])', [userIds]);
+        for (const userRow of rows) {
+          await sendResetLink(userRow.email);
+        }
+      }
+      res.json({ message: `Password reset instructions sent for ${userIds.length} users` });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'Bulk password reset failed' });
@@ -450,7 +481,7 @@ function register(app, { requireUser, invalidateUserRole, actorOf }) {
       return res.status(400).json({ error: 'Payload must contain userIds array and department' });
     }
     try {
-      await db.query('UPDATE users SET department = $1 WHERE id = ANY($2::int[])', [department, userIds]);
+      await db.query('UPDATE users SET department = $1 WHERE workos_user_id = ANY($2::varchar[])', [department, userIds]);
       res.json({ message: `Department updated to "${department}" for ${userIds.length} users` });
     } catch (err) {
       console.error(err);
@@ -464,8 +495,17 @@ function register(app, { requireUser, invalidateUserRole, actorOf }) {
     if (!Array.isArray(userIds) || userIds.length === 0 || !role) {
       return res.status(400).json({ error: 'Payload must contain userIds array and role' });
     }
+    // Same guards as the single-user role change: authorized editor only, never self.
+    const caller = requireUser(req, res);
+    if (!caller) return;
+    if (!(await roleCan(caller, 'userManagement', 'edit'))) {
+      return res.status(403).json({ error: 'Your role is not permitted to change user roles.' });
+    }
+    if (userIds.some((u) => String(u) === String(caller.id))) {
+      return res.status(403).json({ error: 'You cannot change your own role.' });
+    }
     try {
-      await db.query('UPDATE users SET role = $1 WHERE id = ANY($2::int[])', [role, userIds]);
+      await db.query('UPDATE users SET role = $1 WHERE workos_user_id = ANY($2::varchar[])', [role, userIds]);
       res.json({ message: `Role updated to "${role}" for ${userIds.length} users` });
     } catch (err) {
       console.error(err);
@@ -474,4 +514,4 @@ function register(app, { requireUser, invalidateUserRole, actorOf }) {
   });
 }
 
-module.exports = { register };
+module.exports = { register, createSingleUser };

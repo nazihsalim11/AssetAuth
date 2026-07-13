@@ -50,7 +50,7 @@ test('authenticateRequest rejects a request with no credentials', () => {
 
 test('authenticateRequest accepts a valid Bearer token', () => {
   const auth = build();
-  const token = jwt.sign({ id: 7, username: 'alice', role: 'IT Admin' }, JWT_SECRET);
+  const token = jwt.sign({ id: 7, email: 'alice@company.com', role: 'IT Admin' }, JWT_SECRET);
   const result = auth.authenticateRequest({ headers: { authorization: `Bearer ${token}` }, query: {} });
   assert.equal(result.error, undefined);
   assert.equal(result.user.id, 7);

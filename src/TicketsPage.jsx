@@ -467,7 +467,7 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
       const target = usersList.find(u => u.id === parseInt(bulkAssignVal, 10));
       changes.push({
         field: 'Assignee',
-        value: target ? (target.name || target.username) : 'Unassigned',
+        value: target ? (target.name || target.email) : 'Unassigned',
         run: () => api.bulkAssignTickets(selectedTicketIds, bulkAssignVal)
       });
     }
@@ -938,7 +938,7 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
                 <div className="form-group" style={{ margin: 0 }}>
                   <CustomSelect className="form-input-sm" value={filterAssignee} onChange={e => setFilterAssignee(e.target.value)}
                     placeholder="Assignee: All" searchable
-                    options={[{ value: '', label: 'Assignee: All' }, ...usersList.filter(u => u.role !== 'Employee').map(u => ({ value: u.id, label: u.name || u.username }))]} />
+                    options={[{ value: '', label: 'Assignee: All' }, ...usersList.filter(u => u.role !== 'Employee').map(u => ({ value: u.id, label: u.name || u.email }))]} />
                 </div>
                 <div className="form-group" style={{ margin: 0 }}>
                   <CustomSelect className="form-input-sm" value={filterRequester} onChange={e => setFilterRequester(e.target.value)}
@@ -1131,7 +1131,7 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
                     <CustomSelect className="form-input-sm" style={{ width: '140px' }} searchable
                       value={bulkAssignVal} onChange={e => setBulkAssignVal(e.target.value)} disabled={isApplyingBulk}
                       placeholder="Assignee…"
-                      options={[{ value: '', label: 'Assignee…' }, ...usersList.filter(u => u.role !== 'Employee').map(u => ({ value: u.id, label: u.name || u.username }))]} />
+                      options={[{ value: '', label: 'Assignee…' }, ...usersList.filter(u => u.role !== 'Employee').map(u => ({ value: u.id, label: u.name || u.email }))]} />
                   </div>
 
                   {/* Review: exactly what Apply Changes will do. */}
@@ -1397,7 +1397,7 @@ const TicketsPage = ({ isApiConnected, currentRole, currentUser, usersList, addT
                       <CustomSelect value={activeTicket.assignedTo || ''} searchable style={{ marginBottom: '8px' }}
                         onChange={e => handleAssignTicket(e.target.value ? parseInt(e.target.value) : '')}
                         placeholder="-- Choose Agent --"
-                        options={[{ value: '', label: '-- Choose Agent --' }, ...usersList.filter(u => u.role !== 'Employee').map(u => ({ value: u.id, label: (u.name || u.username) + ' (' + u.role + ')' }))]} />
+                        options={[{ value: '', label: '-- Choose Agent --' }, ...usersList.filter(u => u.role !== 'Employee').map(u => ({ value: u.id, label: (u.name || u.email) + ' (' + u.role + ')' }))]} />
 
                       <SpinnerButton
                         type="button"

@@ -15,7 +15,7 @@
  *     existing PO keeps its wording after the master template is revised.
  *
  * The PO number is the business identifier, unique case-insensitively, matching how AMC
- * contracts and usernames are handled elsewhere in this codebase.
+ * contracts and user accounts are handled elsewhere in this codebase.
  */
 
 const db = require('./db');
@@ -358,7 +358,7 @@ function register(app, { requirePermission, requireUser, roleCan }) {
         `INSERT INTO vendors (name, address, gst_vat, contact_person, email, phone, default_payment_terms, default_currency, created_by)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
         [String(name).trim(), address || null, gstVat || null, contactPerson || null, email || null,
-         phone || null, defaultPaymentTerms || null, defaultCurrency || 'INR', user.name || user.username]
+         phone || null, defaultPaymentTerms || null, defaultCurrency || 'INR', user.name]
       );
       res.status(201).json(mapVendor(rows[0]));
     } catch (err) {
@@ -472,7 +472,7 @@ function register(app, { requirePermission, requireUser, roleCan }) {
       const { rows } = await db.query('SELECT * FROM po_settings WHERE id = 1');
       await db.query(
         `INSERT INTO system_logs (actor, action, detail) VALUES ($1,'PO Settings',$2)`,
-        [user.name || user.username, `Updated: ${setClauses.map((c) => c.split(' = ')[0]).join(', ') || 'no fields'}`]
+        [user.name, `Updated: ${setClauses.map((c) => c.split(' = ')[0]).join(', ') || 'no fields'}`]
       );
       res.json({ settings: mapSettings(rows[0]), nextNumber: previewNextNumber(rows[0]) });
     } catch (err) {
@@ -511,11 +511,11 @@ function register(app, { requirePermission, requireUser, roleCan }) {
       const nextVersion = Number(maxRows[0].v) + 1;
       await db.query(
         `INSERT INTO po_terms (version, content, updated_by) VALUES ($1,$2,$3)`,
-        [nextVersion, content, user.name || user.username]
+        [nextVersion, content, user.name]
       );
       await db.query(
         `INSERT INTO system_logs (actor, action, detail) VALUES ($1,'PO Terms Updated',$2)`,
-        [user.name || user.username, `Published Terms & Conditions version ${nextVersion}`]
+        [user.name, `Published Terms & Conditions version ${nextVersion}`]
       );
       const { rows } = await db.query('SELECT * FROM po_terms ORDER BY version DESC');
       const history = rows.map((r) => ({ version: r.version, content: r.content, updatedBy: r.updated_by, createdAt: r.created_at }));
@@ -643,17 +643,17 @@ function register(app, { requirePermission, requireUser, roleCan }) {
           totals.subtotal, totals.taxTotal, totals.discountType, totals.discountValue, totals.discountAmount,
           words, terms ? terms.version : null, terms ? terms.content : null,
           req.body.notes || null, req.body.invoiceId || null, req.body.amcId || null,
-          user.id, user.name || user.username
+          user.id, user.name
         ]
       );
       const po = rows[0];
       await insertItems(client, po.id, totals.lines);
       if (req.body.attachments !== undefined) {
-        await replaceAttachments(client, po.id, req.body.attachments, user.name || user.username);
+        await replaceAttachments(client, po.id, req.body.attachments, user.name);
       }
       await client.query(
         `INSERT INTO system_logs (actor, action, detail) VALUES ($1,'Purchase Order Created',$2)`,
-        [user.name || user.username, `Created PO ${po.po_number} for ${po.vendor}`]
+        [user.name, `Created PO ${po.po_number} for ${po.vendor}`]
       );
       await client.query('COMMIT');
       res.status(201).json({
@@ -758,11 +758,11 @@ function register(app, { requirePermission, requireUser, roleCan }) {
         await insertItems(client, id, totals.lines);
       }
       if (req.body.attachments !== undefined) {
-        await replaceAttachments(client, id, req.body.attachments, user.name || user.username);
+        await replaceAttachments(client, id, req.body.attachments, user.name);
       }
       await client.query(
         `INSERT INTO system_logs (actor, action, detail) VALUES ($1,'Purchase Order Updated',$2)`,
-        [user.name || user.username, `Updated PO ${po.po_number}`]
+        [user.name, `Updated PO ${po.po_number}`]
       );
       await client.query('COMMIT');
       res.json({
@@ -788,7 +788,7 @@ function register(app, { requirePermission, requireUser, roleCan }) {
       if (rows.length === 0) return res.status(404).json({ error: 'Purchase order not found' });
       await db.query(
         `INSERT INTO system_logs (actor, action, detail) VALUES ($1,'Purchase Order Deleted',$2)`,
-        [user.name || user.username, `Deleted PO ${rows[0].po_number}`]
+        [user.name, `Deleted PO ${rows[0].po_number}`]
       );
       res.json({ message: `Purchase order ${rows[0].po_number} deleted` });
     } catch (err) {
@@ -818,7 +818,7 @@ function register(app, { requirePermission, requireUser, roleCan }) {
       const { rows } = await db.query(
         `INSERT INTO purchase_order_documents (purchase_order_id, version, po_number, file_path, file_name, generated_by)
          VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-        [id, version, poRes.rows[0].po_number, filePath, fileName || `${poRes.rows[0].po_number}.pdf`, user.name || user.username]
+        [id, version, poRes.rows[0].po_number, filePath, fileName || `${poRes.rows[0].po_number}.pdf`, user.name]
       );
       res.status(201).json({ document: mapDocument(rows[0]), documents: await loadDocuments(id) });
     } catch (err) {
@@ -893,7 +893,7 @@ function register(app, { requirePermission, requireUser, roleCan }) {
       );
       await db.query(
         `INSERT INTO system_logs (actor, action, detail) VALUES ($1,'Purchase Order Emailed',$2)`,
-        [user.name || user.username, `Emailed PO ${po.po_number} to ${to}`]
+        [user.name, `Emailed PO ${po.po_number} to ${to}`]
       );
 
       res.json({ ok: true, transport: result.transport, delivered: result.transport === 'smtp' });

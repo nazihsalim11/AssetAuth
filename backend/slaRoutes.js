@@ -461,7 +461,7 @@ function policyParams(body, user) {
     toInt(body.firstResponseMinutes, 240), toInt(body.resolutionMinutes, 1440),
     toInt(body.calendarId), Boolean(body.autoAssignEnabled),
     cleanStr(body.autoAssignStrategy) || 'least_loaded', toInt(body.priorityRank, 0),
-    body.active === false ? false : true, user.name || user.username
+    body.active === false ? false : true, user.name
   ];
 }
 

@@ -79,7 +79,7 @@ function register(app, { requirePermission, requireUser }) {
       try {
         const insertCols = extraCol ? `name, ${extraCol}, created_by` : 'name, created_by';
         const insertVals = extraCol ? '$1, $2, $3' : '$1, $2';
-        const params = extraCol ? [name, extra, user.name || user.username] : [name, user.name || user.username];
+        const params = extraCol ? [name, extra, user.name] : [name, user.name];
         const { rows } = await db.query(
           `INSERT INTO ${table} (${insertCols}) VALUES (${insertVals})
            RETURNING ${cols}`,

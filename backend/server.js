@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const cron = require('node-cron');
 const db = require('./db');
 const { runMigrations } = require('./migrations');
+const { createBaseTables, seedData } = require('./seed');
 const storage = require('./storage');
 const notifications = require('./notifications');
 const scheduler = require('./notifications/scheduler');
@@ -36,30 +37,21 @@ const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
 const app = express();
 
-// Wide-open CORS is fine for local development, but in production only the
-// deployed frontend should be able to call this API. Set ALLOWED_ORIGINS to a
-// comma-separated list, e.g. "https://assetflow.vercel.app".
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
   .split(',')
   .map((o) => o.trim())
   .filter(Boolean);
 
-if (allowedOrigins.length > 0) {
-  app.use(cors({
-    origin: (origin, callback) => {
-      // Same-origin and server-to-server requests carry no Origin header.
-      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-      // Reply without the CORS header rather than throwing: the browser blocks the
-      // read, and we avoid turning every stray cross-origin probe into a 500.
-      callback(null, false);
+const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || origin === frontendUrl || origin.startsWith('http://localhost:') || allowedOrigins.includes(origin)) {
+      return callback(null, true);
     }
-  }));
-} else {
-  if (IS_PRODUCTION) {
-    console.warn('WARNING: ALLOWED_ORIGINS is not set — this API accepts requests from any origin.');
-  }
-  app.use(cors());
-}
+    callback(null, false);
+  },
+  credentials: true
+}));
 
 app.use(express.json());
 
@@ -203,7 +195,7 @@ authRoutes.register(app, { JWT_SECRET });
 // --- USER MANAGEMENT API ---
 // Extracted verbatim to src/routes/users.js (departments + user CRUD + bulk ops),
 // including the createSingleUser helper. Registered in place to keep route order.
-usersRoutes.register(app, { requireUser, invalidateUserRole, actorOf });
+usersRoutes.register(app, { requireUser, invalidateUserRole, actorOf, roleCan });
 
 // --- DEPARTMENT & LOCATION MASTERS ---
 // Database-driven master data; the dropdowns across every module read from these.
@@ -231,29 +223,7 @@ const CRON_SECRET = process.env.CRON_SECRET || '';
 
 registerCronRoutes(app, { scheduler, notifications, reports, secret: CRON_SECRET });
 
-if (INTERNAL_CRON_ENABLED) {
-  const runStartupChecks = async () => {
-    await scheduler.runDailyChecks();
-    await scheduler.runSlaChecks();
-  };
-
-  runStartupChecks().catch((err) => console.error('Startup notification checks failed:', err));
-
-  cron.schedule('0 0 * * *', () => scheduler.runDailyChecks());   // 00:00 daily
-  cron.schedule('0 * * * *', () => scheduler.runSlaChecks());     // hourly, on the hour
-  cron.schedule('*/15 * * * *', () => {                            // retry failed sends
-    notifications.retryFailed().catch((err) => console.error('Notification retry failed:', err));
-  });
-  cron.schedule('0 6 * * *', () => {                               // 06:00 daily: email due reports
-    reports.runDueScheduledReports().catch((err) => console.error('Scheduled reports failed:', err));
-  });
-} else if (!CRON_SECRET) {
-  // Loud, because the alternative is a deployment where nothing is scheduled at all
-  // and the first anyone hears of it is a missed SLA.
-  console.error('[cron] DISABLE_INTERNAL_CRON=true but CRON_SECRET is unset: no job can run, in-process or over HTTP.');
-} else {
-  console.log('[cron] in-process scheduler disabled; expecting external triggers on /api/internal/cron/*');
-}
+// Chron scheduler is initialized asynchronously inside runMigrations.then
 
 // --- KNOWLEDGE BASE + HELPDESK OPTIONS ---
 // Registered before the catch-all so its routes are reachable.
@@ -262,6 +232,78 @@ purchaseOrders.register(app, { requirePermission, requireUser, roleCan });
 slaRoutes.register(app, { requireUser, requirePermission });
 dashboards.register(app, { requirePermission });
 reports.register(app, { requireUser, requirePermission });
+
+// --- SYSTEM RESET ENDPOINT ---
+app.post('/api/admin/reset', async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+  if (user.role !== 'Super Admin') {
+    return res.status(403).json({ error: 'Access denied: Only Super Admin can perform system reset.' });
+  }
+
+  const { password } = req.body;
+  if (!password) {
+    return res.status(400).json({ error: 'Password confirmation is required.' });
+  }
+
+  const bcrypt = require('bcryptjs');
+
+  try {
+    const result = await db.query('SELECT password_hash FROM users WHERE id = $1', [user.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Super Admin user not found.' });
+    }
+
+    const isMatch = await bcrypt.compare(password, result.rows[0].password_hash);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Incorrect password.' });
+    }
+
+    console.log('=== SYSTEM RESET INITIATED BY SUPER ADMIN ===');
+
+    // Perform the truncation/deletion of all business data
+    const resetQueries = `
+      BEGIN;
+      TRUNCATE assets, amcs, invoices, asset_assignments, movements, documents, 
+               notifications, notification_deliveries, emails, notification_preferences, 
+               notification_recipients, kb_categories, kb_articles, kb_article_attachments, 
+               kb_related_articles, purchase_orders, purchase_order_items, purchase_order_attachments, 
+               purchase_order_documents, calendar_holidays, scheduled_reports, import_jobs, 
+               departments, locations, vendors, system_logs CASCADE;
+      DELETE FROM auth.users WHERE email != 'admin@company.com';
+      DELETE FROM users WHERE role != 'Super Admin';
+      COMMIT;
+    `;
+    
+    await db.query(resetQueries);
+
+    // Write the system reset event to system_logs AFTER truncate so it's preserved
+    await db.query(
+      'INSERT INTO system_logs (timestamp, actor, action, detail) VALUES ($1, $2, $3, $4)',
+      [new Date().toISOString(), user.name || user.email, 'SYSTEM_RESET', 'System reset completed. All other business data wiped.']
+    );
+
+    // Trigger Convex sync manually for all affected tables to ensure Convex matches PGlite exactly
+    const TABLES_TO_SYNC = [
+      'assets', 'amcs', 'invoices', 'asset_assignments', 'movements', 'documents', 
+      'notifications', 'notification_deliveries', 'emails', 'notification_preferences', 
+      'notification_recipients', 'kb_categories', 'kb_articles', 'kb_article_attachments', 
+      'kb_related_articles', 'purchase_orders', 'purchase_order_items', 'purchase_order_attachments', 
+      'purchase_order_documents', 'calendar_holidays', 'scheduled_reports', 'import_jobs', 
+      'departments', 'locations', 'vendors', 'users', 'system_logs'
+    ];
+
+    for (const table of TABLES_TO_SYNC) {
+      await db.syncTableToConvex(table);
+    }
+
+    console.log('=== SYSTEM RESET COMPLETED SUCCESSFULLY ===');
+    res.json({ success: true, message: 'System reset completed successfully. All data wiped.' });
+  } catch (err) {
+    console.error('System reset failed:', err);
+    res.status(500).json({ error: `System reset failed: ${err.message}` });
+  }
+});
 
 // --- 404 handler for unmatched API routes (JSON, not Express's default HTML page) ---
 app.use('/api', (req, res) => {
@@ -277,7 +319,33 @@ app.use((err, req, res, _next) => {
 });
 
 const PORT = process.env.PORT || 5000;
-runMigrations().then(() => {
+createBaseTables().then(() => runMigrations()).then(() => seedData()).then(async () => {
+  await db.loadFromConvex();
+
+  if (INTERNAL_CRON_ENABLED) {
+    const runStartupChecks = async () => {
+      await scheduler.runDailyChecks();
+      await scheduler.runSlaChecks();
+    };
+
+    runStartupChecks().catch((err) => console.error('Startup notification checks failed:', err));
+
+    cron.schedule('0 0 * * *', () => scheduler.runDailyChecks());   // 00:00 daily
+    cron.schedule('0 * * * *', () => scheduler.runSlaChecks());     // hourly, on the hour
+    cron.schedule('*/15 * * * *', () => {                            // retry failed sends
+      notifications.retryFailed().catch((err) => console.error('Notification retry failed:', err));
+    });
+    cron.schedule('0 6 * * *', () => {                               // 06:00 daily: email due reports
+      reports.runDueScheduledReports().catch((err) => console.error('Scheduled reports failed:', err));
+    });
+  } else if (!CRON_SECRET) {
+    // Loud, because the alternative is a deployment where nothing is scheduled at all
+    // and the first anyone hears of it is a missed SLA.
+    console.error('[cron] DISABLE_INTERNAL_CRON=true but CRON_SECRET is unset: no job can run, in-process or over HTTP.');
+  } else {
+    console.log('[cron] in-process scheduler disabled; expecting external triggers on /api/internal/cron/*');
+  }
+
   app.listen(PORT, () => console.log(`Backend server running on port ${PORT}`));
 }).catch(err => {
   console.error('Server startup failed due to migration failure:', err);

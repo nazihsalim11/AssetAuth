@@ -63,6 +63,7 @@ async function apiFetch(endpoint, options = {}) {
   try {
     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
       ...fetchOptions,
+      credentials: 'include',
       signal: controller.signal,
       headers,
     });
@@ -144,7 +145,7 @@ export const api = {
   },
 
   // Auth Password Flow
-  changePassword: (username, currentPassword, newPassword) => apiFetch('/auth/change-password', { method: 'POST', body: JSON.stringify({ username, currentPassword, newPassword }) }),
+  changePassword: (email, currentPassword, newPassword) => apiFetch('/auth/change-password', { method: 'POST', body: JSON.stringify({ email, currentPassword, newPassword }) }),
 
   // Assets
   getAssets: () => apiFetch('/assets'),
@@ -307,6 +308,7 @@ export const api = {
       const token = mockAuthService.getToken();
       const response = await fetch(`${API_BASE_URL}/upload`, {
         method: 'POST',
+        credentials: 'include',
         // Do NOT set Content-Type here; the browser must add the multipart boundary.
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: formData

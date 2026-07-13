@@ -223,16 +223,16 @@ const REPORTS = {
     build: async (f) => {
       const { clause, params } = buildWhere(f, { department: 't.department' });
       const where = clause ? `${clause} AND t.assigned_to IS NOT NULL` : 'WHERE t.assigned_to IS NOT NULL';
-      const raw = await q(`SELECT u.name, u.username, u.department,
+      const raw = await q(`SELECT u.name, u.department,
           COUNT(*)::int AS assigned,
           COUNT(*) FILTER (WHERE t.status IN ('Resolved','Closed'))::int AS resolved,
           COUNT(*) FILTER (WHERE t.status NOT IN ('Resolved','Closed'))::int AS open_workload,
           COUNT(*) FILTER (WHERE t.status IN ('Resolved','Closed') AND NOT t.resolution_breached)::int AS resolved_on_time,
           AVG(EXTRACT(EPOCH FROM (t.resolved_at - t.created_at))/3600) FILTER (WHERE t.resolved_at IS NOT NULL) AS avg_resolution_hours
-        FROM tickets t JOIN users u ON u.id = t.assigned_to ${where}
-        GROUP BY u.id, u.name, u.username, u.department ORDER BY resolved DESC`, params);
+        FROM tickets t JOIN users u ON u.workos_user_id = t.assigned_to ${where}
+        GROUP BY u.workos_user_id, u.name, u.department ORDER BY resolved DESC`, params);
       const rows = raw.map((r) => ({
-        name: r.name || r.username, department: r.department, assigned: r.assigned, resolved: r.resolved,
+        name: r.name, department: r.department, assigned: r.assigned, resolved: r.resolved,
         open_workload: r.open_workload,
         avg_resolution_hours: r.avg_resolution_hours == null ? null : Math.round(r.avg_resolution_hours * 10) / 10,
         sla_compliance: r.resolved ? `${Math.round((r.resolved_on_time / r.resolved) * 100)}%` : 'n/a'
@@ -471,7 +471,7 @@ function register(app, { requirePermission }) {
       const rows = await q(
         `INSERT INTO scheduled_reports (report_key, name, filters, frequency, recipients, format, next_run, created_by)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-        [b.reportKey, b.name || REPORTS[b.reportKey].label, b.filters || {}, frequency, recipients, b.format || 'csv', nextRunFor(frequency), user.name || user.username]
+        [b.reportKey, b.name || REPORTS[b.reportKey].label, b.filters || {}, frequency, recipients, b.format || 'csv', nextRunFor(frequency), user.name]
       );
       res.status(201).json(mapSchedule(rows[0]));
     } catch (err) {

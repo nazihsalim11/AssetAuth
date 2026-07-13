@@ -17,7 +17,7 @@ const ACTIVE_TICKET_STATUSES = ['Open', 'In Progress', 'Pending', 'On Hold', 'Re
 
 async function eligibleAgents(department, client = db) {
   const { rows } = await client.query(
-    `SELECT id, name, username, department, role::text AS role
+    `SELECT id, name, department, role::text AS role
      FROM users
      WHERE status = 'Active' AND role::text <> 'Employee'`
   );

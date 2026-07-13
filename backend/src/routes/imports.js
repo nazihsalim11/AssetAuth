@@ -101,82 +101,62 @@ const buildMultiRowValues = (rows, template) => {
   return { text: tuples.join(', '), params };
 };
 
-const AUTH_META = '{"provider":"email","providers":["email"]}';
+const { WorkOS } = require('@workos-inc/node');
+const emailChannel = require('../../notifications/channels/email');
+const workos = process.env.WORKOS_API_KEY ? new WorkOS(process.env.WORKOS_API_KEY) : null;
+
+// Best-effort: email a WorkOS-hosted password-setup link to an imported user so they
+// can set a password and sign in (WorkOS owns the credential).
+async function sendImportResetLink(email) {
+  if (!workos || !email) return;
+  try {
+    const reset = await workos.userManagement.createPasswordReset({ email });
+    if (reset && reset.passwordResetUrl && emailChannel.isConfigured()) {
+      await emailChannel.send({
+        to: email,
+        subject: 'Set your AssetFlow password',
+        body: `An AssetFlow account has been created for you.\n\nSet your password to sign in:\n${reset.passwordResetUrl}\n`,
+      }).catch(() => {});
+    }
+  } catch (e) {
+    console.warn('[Import Invite] Failed to create WorkOS password reset:', e.message);
+  }
+}
 
 const insertUserChunk = async (client, chunk) => {
-  const authRows = chunk.map((u) => [
-    u.authId,
-    u.email,
-    u.passwordHash,
-    JSON.stringify({ name: u.name, role: u.role, username: u.username })
-  ]);
-  const authValues = buildMultiRowValues(
-    authRows,
-    ([id, email, pwd, meta]) =>
-      `(${id}, '00000000-0000-0000-0000-000000000000', ${email}, ${pwd}, 'authenticated', 'authenticated', ` +
-      `false, false, NOW(), '${AUTH_META}'::jsonb, ${meta}::jsonb, NOW(), NOW())`
-  );
-  await client.query(
-    `INSERT INTO auth.users (
-       id, instance_id, email, encrypted_password, aud, role,
-       is_sso_user, is_anonymous, email_confirmed_at,
-       raw_app_meta_data, raw_user_meta_data, created_at, updated_at
-     ) VALUES ${authValues.text}`,
-    authValues.params
-  );
-
   const userRows = chunk.map((u) => [
-    u.username, u.passwordHash, u.name, u.role, u.email, u.employeeId,
-    u.phoneNumber, u.department, u.designation, u.status, u.resetRequired, u.authId
+    u.authId, u.name, u.role, u.email, u.employeeId,
+    u.phoneNumber, u.department, u.designation, u.status
   ]);
   const userValues = buildMultiRowValues(userRows, (p) => `(${p.join(', ')})`);
   await client.query(
     `INSERT INTO users (
-       username, password_hash, name, role, email, employee_id,
-       phone_number, department, designation, status, password_reset_required, auth_id
+       workos_user_id, name, role, email, employee_id,
+       phone_number, department, designation, status
      ) VALUES ${userValues.text}`,
     userValues.params
   );
 };
 
 async function processEmployeeImport(jobId, employees) {
-  const summary = { total: employees.length, success: 0, failed: 0, duplicate: 0, errors: [], generatedPasswords: [] };
+  const summary = { total: employees.length, success: 0, failed: 0, duplicate: 0, errors: [] };
   const client = await db.pool.connect();
 
   try {
-    // One round trip, instead of three per employee.
     const existing = await client.query(
-      'SELECT LOWER(employee_id) AS eid, LOWER(email) AS email, LOWER(username) AS username FROM users'
+      'SELECT LOWER(employee_id) AS eid, LOWER(email) AS email FROM users'
     );
     const takenEmployeeIds = new Set(existing.rows.map((r) => r.eid).filter(Boolean));
     const takenEmails = new Set(existing.rows.map((r) => r.email).filter(Boolean));
-    const takenUsernames = new Set(existing.rows.map((r) => r.username).filter(Boolean));
 
-    // Department master, for validating the sheet's Department column against the single
-    // source of truth. Only enforced once the master is populated.
     const deptMaster = await client.query('SELECT LOWER(name) AS name FROM departments WHERE is_active');
     const validDepartments = new Set(deptMaster.rows.map((r) => r.name));
-
-    // bcryptjs costs ~150ms per hash and blocks the event loop. The generated temp
-    // password is a known constant that every such account must reset on first
-    // login, so hashing it once leaks nothing that the constant does not already.
-    // Passwords supplied in the file get their own salt and hash.
-    let sharedDefaultHash = null;
-    const hashPassword = async (plaintext, isGeneratedDefault) => {
-      if (isGeneratedDefault) {
-        if (!sharedDefaultHash) {
-          sharedDefaultHash = await bcrypt.hash(plaintext, await bcrypt.genSalt(10));
-        }
-        return sharedDefaultHash;
-      }
-      return bcrypt.hash(plaintext, await bcrypt.genSalt(10));
-    };
 
     const prepared = [];
     for (let i = 0; i < employees.length; i++) {
       const rowNum = i + 1;
       const emp = employees[i];
-      const { employeeId, firstName, lastName, email, department, designation, status, password } = emp;
+      const { employeeId, firstName, lastName, email, department, designation, status } = emp;
 
       const { errors, formattedPhone, targetRole } = validateEmployeeRow(emp);
       const deptValue = (department || '').trim();
@@ -200,26 +180,31 @@ async function processEmployeeImport(jobId, employees) {
         continue;
       }
 
-      const baseUsername = email.split('@')[0];
-      let username = baseUsername;
-      let suffix = 1;
-      while (takenUsernames.has(username.toLowerCase())) {
-        username = baseUsername + suffix;
-        suffix++;
-      }
-
-      // Reserve straight away so later rows in the same file cannot collide.
       takenEmployeeIds.add(employeeId.toLowerCase());
       takenEmails.add(email.toLowerCase());
-      takenUsernames.add(username.toLowerCase());
 
-      const resetRequired = !password;
-      const plaintext = password || DEFAULT_TEMP_PASSWORD;
+      // Create on WorkOS or fallback to mock UUID
+      let authId = null;
+      if (workos) {
+        try {
+          const workosUser = await workos.userManagement.createUser({
+            email,
+            emailVerified: true,
+            firstName: firstName || '',
+            lastName: lastName || '',
+          });
+          authId = workosUser.id;
+        } catch (workosErr) {
+          console.warn('[WorkOS Import User Creation Warning] Failed to create user in WorkOS:', workosErr.message);
+        }
+      }
+      if (!authId) {
+        authId = 'mock-' + email.split('@')[0] + '-' + Math.random().toString(36).substring(2, 7);
+      }
 
       prepared.push({
         rowNum,
-        authId: randomUUID(),
-        username,
+        authId,
         name: `${firstName} ${lastName}`,
         role: targetRole,
         email,
@@ -228,22 +213,13 @@ async function processEmployeeImport(jobId, employees) {
         department: department || '',
         designation: designation || '',
         status: status || 'Active',
-        resetRequired,
-        passwordHash: await hashPassword(plaintext, resetRequired),
-        plaintext
       });
     }
 
     const recordSuccess = (u) => {
       summary.success++;
-      if (u.resetRequired) {
-        summary.generatedPasswords.push({
-          employeeId: u.employeeId,
-          username: u.username,
-          name: u.name,
-          email: u.email,
-          tempPassword: u.plaintext
-        });
+      if (workos && u.authId && !u.authId.startsWith('mock-')) {
+        sendImportResetLink(u.email);
       }
     };
 
@@ -257,8 +233,6 @@ async function processEmployeeImport(jobId, employees) {
         await client.query('RELEASE SAVEPOINT chunk_sp');
         chunk.forEach(recordSuccess);
       } catch (chunkErr) {
-        // One bad row poisons its whole chunk, so replay it row by row to
-        // attribute the failure and still import everyone else.
         await client.query('ROLLBACK TO SAVEPOINT chunk_sp');
         console.warn(`Chunk insert failed, retrying ${chunk.length} rows individually:`, chunkErr.message);
         for (let k = 0; k < chunk.length; k++) {
@@ -274,7 +248,6 @@ async function processEmployeeImport(jobId, employees) {
             summary.failed++;
             summary.errors.push({ row: u.rowNum, employeeId: u.employeeId, error: rowErr.message });
           }
-          // This path is slow, so keep the progress bar moving within the chunk.
           if (k % 10 === 9) await setImportProgress(jobId, i + k + 1);
         }
       }
@@ -517,7 +490,7 @@ function register(app) {
         batchAssetIds.add(assetId);
       }
 
-      const actor = req.headers['x-user-username'] || 'Admin';
+      const actor = req.headers['x-user-email'] || 'Admin';
       await client.query(
         `INSERT INTO system_logs (actor, action, detail)
          VALUES ($1, $2, $3)`,

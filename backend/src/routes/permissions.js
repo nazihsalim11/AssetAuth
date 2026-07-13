@@ -60,13 +60,13 @@ function register(app, { requireUser, roleCan, loadRolePermissions, invalidateRo
 
       // Timestamped: every permissions edit is its own event, never deduplicated away.
       notifications.notify('security.permissions_changed', `permissions-changed:${Date.now()}`, {
-        actor: user.name || user.username,
+        actor: user.name,
         summary: Object.keys(clean).join(', ')
       });
 
       await db.query(
         `INSERT INTO system_logs (actor, action, detail) VALUES ($1,'Role Permissions',$2)`,
-        [user.name || user.username, `Updated: ${Object.keys(clean).join(', ')}`]
+        [user.name, `Updated: ${Object.keys(clean).join(', ')}`]
       );
       res.json(await loadRolePermissions({ fresh: true }));
     } catch (err) {

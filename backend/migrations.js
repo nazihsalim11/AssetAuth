@@ -11,9 +11,10 @@ const runMigrations = async () => {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number VARCHAR(50);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS department VARCHAR(100);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS designation VARCHAR(100);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS location VARCHAR(100);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS manager_id VARCHAR(255) REFERENCES users(workos_user_id);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'Active';
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_required BOOLEAN DEFAULT FALSE;
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_id UUID UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_preferences JSONB DEFAULT '{"email": true, "push": true}'::jsonb;
     `);
 
     // Backfill empty employee IDs to NULL to prevent unique constraint failures on empty strings
@@ -26,9 +27,16 @@ const runMigrations = async () => {
       CREATE UNIQUE INDEX IF NOT EXISTS users_employee_id_lower_idx ON users (LOWER(employee_id));
     `);
 
-    // Ensure case-insensitive uniqueness constraint/index on username
+    // Username has been retired: email is the sole login identifier. Drop the legacy
+    // column and its index if an older schema still has them.
     await db.directQuery(`
-      CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower_idx ON users (LOWER(username));
+      DROP INDEX IF EXISTS users_username_lower_idx;
+      ALTER TABLE users DROP COLUMN IF EXISTS username;
+    `);
+
+    // Email is the login identifier, so enforce case-insensitive uniqueness on it.
+    await db.directQuery(`
+      CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_idx ON users (LOWER(email));
     `);
 
     // 2. Alter assets table to add quantity and specification fields
@@ -48,7 +56,7 @@ const runMigrations = async () => {
         id SERIAL PRIMARY KEY,
         asset_id VARCHAR(50) REFERENCES assets(id) ON DELETE CASCADE,
         employee_name VARCHAR(255) NOT NULL,
-        user_id INT REFERENCES users(id) ON DELETE SET NULL,
+        user_id VARCHAR(255) REFERENCES users(workos_user_id) ON DELETE SET NULL,
         quantity INT NOT NULL DEFAULT 1,
         department VARCHAR(100),
         date DATE NOT NULL DEFAULT CURRENT_DATE,
@@ -68,9 +76,9 @@ const runMigrations = async () => {
         department VARCHAR(100) NOT NULL,
         priority VARCHAR(50) NOT NULL,
         status VARCHAR(50) NOT NULL DEFAULT 'Open',
-        created_by INT REFERENCES users(id) ON DELETE CASCADE,
+        created_by VARCHAR(255) REFERENCES users(workos_user_id) ON DELETE CASCADE,
         created_by_name VARCHAR(255) NOT NULL,
-        assigned_to INT REFERENCES users(id) ON DELETE SET NULL,
+        assigned_to VARCHAR(255) REFERENCES users(workos_user_id) ON DELETE SET NULL,
         assigned_to_name VARCHAR(255),
         sla_deadline TIMESTAMP WITH TIME ZONE NOT NULL,
         resolved_at TIMESTAMP WITH TIME ZONE,
@@ -99,7 +107,7 @@ const runMigrations = async () => {
         id SERIAL PRIMARY KEY,
         ticket_id INT REFERENCES tickets(id) ON DELETE CASCADE,
         author_name VARCHAR(255) NOT NULL,
-        author_id INT REFERENCES users(id) ON DELETE SET NULL,
+        author_id VARCHAR(255) REFERENCES users(workos_user_id) ON DELETE SET NULL,
         comment_text TEXT NOT NULL,
         is_internal BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -126,7 +134,7 @@ const runMigrations = async () => {
     // targets one stakeholder. event_key identifies the thing that happened, so the
     // same event can never be recorded twice for the same person on the same channel.
     await db.directQuery(`
-      ALTER TABLE notifications ADD COLUMN IF NOT EXISTS user_id INT REFERENCES users(id) ON DELETE CASCADE;
+      ALTER TABLE notifications ADD COLUMN IF NOT EXISTS user_id VARCHAR(255) REFERENCES users(workos_user_id) ON DELETE CASCADE;
       ALTER TABLE notifications ADD COLUMN IF NOT EXISTS event_key TEXT;
       CREATE INDEX IF NOT EXISTS notifications_user_id_idx ON notifications (user_id);
       CREATE INDEX IF NOT EXISTS notifications_created_at_idx ON notifications (created_at DESC);
@@ -140,7 +148,7 @@ const runMigrations = async () => {
         event_key TEXT NOT NULL,
         event_type VARCHAR(60) NOT NULL,
         channel VARCHAR(20) NOT NULL,
-        recipient_user_id INT REFERENCES users(id) ON DELETE SET NULL,
+        recipient_user_id VARCHAR(255) REFERENCES users(workos_user_id) ON DELETE SET NULL,
         recipient_name VARCHAR(255),
         recipient_address VARCHAR(255),
         subject VARCHAR(255),
@@ -158,7 +166,7 @@ const runMigrations = async () => {
     // never equal to NULL in a unique index, which would let duplicates through.
     await db.directQuery(`
       CREATE UNIQUE INDEX IF NOT EXISTS notification_deliveries_dedupe_idx
-        ON notification_deliveries (event_key, channel, COALESCE(recipient_user_id, 0));
+        ON notification_deliveries (event_key, channel, COALESCE(recipient_user_id, ''));
       CREATE INDEX IF NOT EXISTS notification_deliveries_status_idx ON notification_deliveries (status);
       CREATE INDEX IF NOT EXISTS notification_deliveries_created_idx ON notification_deliveries (created_at DESC);
     `);
@@ -227,7 +235,7 @@ const runMigrations = async () => {
         category_id INT REFERENCES kb_categories(id) ON DELETE SET NULL,
         is_faq BOOLEAN NOT NULL DEFAULT FALSE,
         is_published BOOLEAN NOT NULL DEFAULT FALSE,
-        author_id INT REFERENCES users(id) ON DELETE SET NULL,
+        author_id VARCHAR(255) REFERENCES users(workos_user_id) ON DELETE SET NULL,
         author_name VARCHAR(255),
         view_count INT NOT NULL DEFAULT 0,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -302,7 +310,7 @@ const runMigrations = async () => {
         notes TEXT,
         invoice_id VARCHAR(50) REFERENCES invoices(id) ON DELETE SET NULL,
         amc_id VARCHAR(50) REFERENCES amcs(id) ON DELETE SET NULL,
-        created_by INT REFERENCES users(id) ON DELETE SET NULL,
+        created_by VARCHAR(255) REFERENCES users(workos_user_id) ON DELETE SET NULL,
         created_by_name VARCHAR(255),
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -343,15 +351,8 @@ const runMigrations = async () => {
       ON CONFLICT (name) DO NOTHING;
     `);
 
-    // 8. Update seeded users to have departments and metadata
-    await db.directQuery(`
-      UPDATE users SET department = 'IT', designation = 'IT Administrator', status = 'Active', employee_id = 'EMP-IT01' WHERE username = 'itadmin' AND department IS NULL;
-      UPDATE users SET department = 'Operations', designation = 'Facility Lead', status = 'Active', employee_id = 'EMP-FC01' WHERE username = 'facilityadmin' AND department IS NULL;
-      UPDATE users SET department = 'Finance', designation = 'Finance Manager', status = 'Active', employee_id = 'EMP-FN01' WHERE username = 'finance' AND department IS NULL;
-      UPDATE users SET department = 'HR', designation = 'HR Generalist', status = 'Active', employee_id = 'EMP-HR01' WHERE username = 'employee' AND department IS NULL;
-      UPDATE users SET department = 'Audit', designation = 'Internal Auditor', status = 'Active', employee_id = 'EMP-AU01' WHERE username = 'auditor' AND department IS NULL;
-      UPDATE users SET department = 'Management', designation = 'Operations Lead', status = 'Active', employee_id = 'EMP-AD01' WHERE username = 'admin' AND department IS NULL;
-    `);
+    // Seeded departments added
+    await db.directQuery(`SELECT 1;`);
 
     // 8b. Import jobs — lets long imports run in the background and gives the
     //     client an idempotency key so retrying a timed-out import cannot
@@ -384,47 +385,13 @@ const runMigrations = async () => {
     //    genuinely-linkable rows survive the orphan sweep in step 10.
     const repaired = await db.directQuery(`
       UPDATE asset_assignments aa
-      SET user_id = u.id
+      SET user_id = u.workos_user_id
       FROM users u
       WHERE aa.user_id IS NULL
         AND LOWER(TRIM(aa.employee_name)) = LOWER(TRIM(u.name));
     `);
     if (repaired.rowCount > 0) {
       console.log(`Re-linked ${repaired.rowCount} assignment(s) to their employee record.`);
-    }
-
-    // Backfill any users that don't have auth_id
-    const unlinkedUsers = await db.directQuery("SELECT * FROM users WHERE auth_id IS NULL");
-    if (unlinkedUsers.rows.length > 0) {
-      console.log(`Backfilling auth.users for ${unlinkedUsers.rows.length} unlinked users...`);
-      const { randomUUID } = require('crypto');
-      for (const u of unlinkedUsers.rows) {
-        const authId = randomUUID();
-        const rawUserMetadata = JSON.stringify({ name: u.name, role: u.role, username: u.username });
-        
-        // Check if user already exists in auth.users by email
-        const authExists = await db.directQuery("SELECT id FROM auth.users WHERE LOWER(email) = LOWER($1)", [u.email]);
-        let finalAuthId = authId;
-        if (authExists.rows.length > 0) {
-          finalAuthId = authExists.rows[0].id;
-        } else {
-          // Insert auth record
-          const authQuery = `
-            INSERT INTO auth.users (
-              id, instance_id, email, encrypted_password, aud, role, 
-              is_sso_user, is_anonymous, email_confirmed_at, 
-              raw_app_meta_data, raw_user_meta_data, created_at, updated_at
-            ) VALUES ($1, '00000000-0000-0000-0000-000000000000', $2, $3, 'authenticated', 'authenticated', 
-                      false, false, NOW(), 
-                      '{"provider":"email","providers":["email"]}'::jsonb, $4::jsonb, NOW(), NOW())
-          `;
-          await db.directQuery(authQuery, [authId, u.email, u.password_hash, rawUserMetadata]);
-        }
-
-        // Update public profile
-        await db.directQuery("UPDATE users SET auth_id = $1 WHERE id = $2", [finalAuthId, u.id]);
-      }
-      console.log('Backfill completed.');
     }
     // 10. Sweep orphaned custodian assignments, then enforce the constraints that
     //     stop new ones ever appearing. ON DELETE CASCADE on both foreign keys means
@@ -434,7 +401,7 @@ const runMigrations = async () => {
       WHERE asset_id IS NULL
          OR asset_id NOT IN (SELECT id FROM assets)
          OR user_id IS NULL
-         OR user_id NOT IN (SELECT id FROM users);
+         OR user_id NOT IN (SELECT workos_user_id FROM users);
     `);
     if (orphans.rowCount > 0) {
       console.log(`Removed ${orphans.rowCount} orphaned assignment(s).`);
@@ -443,7 +410,7 @@ const runMigrations = async () => {
     await db.directQuery(`
       ALTER TABLE asset_assignments DROP CONSTRAINT IF EXISTS asset_assignments_user_id_fkey;
       ALTER TABLE asset_assignments ALTER COLUMN user_id SET NOT NULL;
-      ALTER TABLE asset_assignments ADD CONSTRAINT asset_assignments_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+      ALTER TABLE asset_assignments ADD CONSTRAINT asset_assignments_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(workos_user_id) ON DELETE CASCADE;
 
       ALTER TABLE asset_assignments DROP CONSTRAINT IF EXISTS asset_assignments_asset_id_fkey;
       ALTER TABLE asset_assignments ALTER COLUMN asset_id SET NOT NULL;
@@ -464,7 +431,7 @@ const runMigrations = async () => {
         console.log('Backfilling active assignments from assets table...');
         const inserted = await db.directQuery(`
           INSERT INTO asset_assignments (asset_id, employee_name, user_id, quantity, department, status, date)
-          SELECT a.id, u.name, u.id, 1, a.department, 'Assigned', COALESCE(a.purchase_date, CURRENT_DATE)
+          SELECT a.id, u.name, u.workos_user_id, 1, a.department, 'Assigned', COALESCE(a.purchase_date, CURRENT_DATE)
           FROM assets a
           JOIN users u ON LOWER(TRIM(a.assigned_employee)) = LOWER(TRIM(u.name))
           WHERE a.status = 'Assigned' AND a.assigned_employee IS NOT NULL AND a.assigned_employee <> ''
@@ -567,7 +534,7 @@ const runMigrations = async () => {
         id SERIAL PRIMARY KEY,
         event_type VARCHAR(60) NOT NULL,
         role VARCHAR(50),
-        user_id INT REFERENCES users(id) ON DELETE CASCADE,
+        user_id VARCHAR(255) REFERENCES users(workos_user_id) ON DELETE CASCADE,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT notification_recipients_target_chk CHECK (role IS NOT NULL OR user_id IS NOT NULL)
       );

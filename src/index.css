@@ -3323,30 +3323,6 @@ select.form-input {
   margin: auto;
 }
 
-.login-spacer-left {
-  display: none;
-}
-
-@media (min-width: 1024px) {
-  .login-layout-container.with-demo {
-    grid-template-columns: 1fr 420px 1fr;
-    max-width: 1200px;
-    width: 100%;
-    align-items: center;
-    gap: var(--sp-12);
-  }
-
-  .login-spacer-left {
-    display: block;
-  }
-
-  .demo-creds-card {
-    max-width: 340px;
-    width: 100%;
-    justify-self: start;
-  }
-}
-
 .login-card {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
@@ -3560,83 +3536,6 @@ select.form-input {
   flex-shrink: 0;
   color: var(--status-disposed);
   margin-top: 1px;
-}
-
-.demo-creds-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-xl);
-  padding: var(--sp-6);
-  box-shadow: var(--shadow-lg);
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-4);
-  max-height: 520px;
-  overflow-y: auto;
-}
-
-.demo-creds-title {
-  font-family: var(--font-heading);
-  font-size: var(--fs-h3);
-  color: var(--text-primary);
-  margin: 0;
-  font-weight: 600;
-}
-
-.demo-creds-desc {
-  font-size: var(--fs-caption);
-  color: var(--text-secondary);
-  margin: 0;
-}
-
-.demo-creds-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-}
-
-.demo-cred-item {
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  padding: var(--sp-3);
-  background: var(--bg-input);
-  cursor: pointer;
-  transition: border-color var(--dur-1) var(--ease-standard),
-              background-color var(--dur-1) var(--ease-standard),
-              transform var(--dur-1) var(--ease-standard);
-}
-
-.demo-cred-item:hover {
-  border-color: var(--primary);
-  background: var(--bg-card-hover);
-  transform: translate3d(2px, 0, 0);
-}
-
-.demo-cred-role {
-  font-size: var(--fs-micro);
-  font-weight: 600;
-  color: var(--primary);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
-  margin-bottom: var(--sp-1);
-}
-
-.demo-cred-details {
-  font-family: var(--font-mono);
-  font-size: var(--fs-micro);
-  color: var(--text-secondary);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.demo-cred-label {
-  color: var(--text-muted);
-}
-
-.demo-cred-val {
-  color: var(--text-primary);
-  font-weight: 500;
 }
 
 .login-spinner {

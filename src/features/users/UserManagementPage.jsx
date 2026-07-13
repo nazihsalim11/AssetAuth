@@ -3,6 +3,7 @@ import { can as canPerm } from '../../permissions'
 import RolePermissionMatrix from '../../RolePermissionMatrix'
 import UserDirectoryPage from './UserDirectoryPage'
 import MasterDataPage from '../masters/MasterDataPage'
+import SystemReset from './SystemReset'
 
 const UserManagementPage = ({ usersList, setUsersList, isApiConnected, rolePermissions, setRolePermissions, permModel, onBulkImportClick, addToast, onUsersDeleted, currentRole, departments = [], onMastersChanged }) => {
   const [usersSubTab, setUsersSubTab] = useState('directory');
@@ -22,11 +23,18 @@ const UserManagementPage = ({ usersList, setUsersList, isApiConnected, rolePermi
     locDelete: canPerm(rolePermissions, currentRole, 'branches', 'delete'),
   };
   const canManageMasters = Object.values(masterPerms).some(Boolean);
-  const subTabs = [{ id: 'directory', label: '👥  User Directory' }];
+  const subTabs = [{ id: 'directory', label: '👥  User Management' }];
   if (canManagePerms) subTabs.push({ id: 'permissions', label: '🔐  Role Permissions' });
   if (canManageMasters) subTabs.push({ id: 'masters', label: '🏢  Departments & Locations' });
-  const activeSubTab = ((usersSubTab === 'permissions' && !canManagePerms) || (usersSubTab === 'masters' && !canManageMasters))
-    ? 'directory' : usersSubTab;
+  if (currentRole === 'Super Admin') {
+    subTabs.push({ id: 'reset', label: '⚠️  System Reset' });
+  }
+  const activeSubTab = (
+    (usersSubTab === 'permissions' && !canManagePerms) || 
+    (usersSubTab === 'masters' && !canManageMasters) ||
+    (usersSubTab === 'reset' && currentRole !== 'Super Admin')
+  ) ? 'directory' : usersSubTab;
+  
   return (
     <div>
       {/* Sub-tab bar */}
@@ -76,6 +84,9 @@ const UserManagementPage = ({ usersList, setUsersList, isApiConnected, rolePermi
       )}
       {activeSubTab === 'masters' && (
         <MasterDataPage canManage={masterPerms} addToast={addToast} onChanged={onMastersChanged} />
+      )}
+      {activeSubTab === 'reset' && (
+        <SystemReset addToast={addToast} currentRole={currentRole} />
       )}
     </div>
   );

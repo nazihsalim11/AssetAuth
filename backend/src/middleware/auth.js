@@ -51,10 +51,24 @@ module.exports = function createAuth({ db, jwt, permissionModel, JWT_SECRET, ALL
   };
 
   const authenticateRequest = (req) => {
+    let token = null;
     const authHeader = req.headers['authorization'];
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.substring(7);
+      token = authHeader.substring(7);
+    }
+
+    if (!token && req.headers.cookie) {
+      const cookies = Object.fromEntries(
+        req.headers.cookie.split(';').map(c => {
+          const parts = c.trim().split('=');
+          return [parts[0], parts.slice(1).join('=')];
+        })
+      );
+      token = cookies['auth_token'];
+    }
+
+    if (token) {
       try {
         return { user: jwt.verify(token, JWT_SECRET) };
       } catch (e) {
@@ -68,12 +82,12 @@ module.exports = function createAuth({ db, jwt, permissionModel, JWT_SECRET, ALL
 
     if (ALLOW_HEADER_AUTH) {
       const role = req.headers['x-user-role'] || req.query.role;
-      const username = req.headers['x-user-username'] || req.query.username;
-      const name = req.headers['x-user-name'] || req.query.name || username;
+      const email = req.headers['x-user-email'] || req.query.email;
+      const name = req.headers['x-user-name'] || req.query.name || email;
       const department = req.headers['x-user-department'] || req.query.department;
       const id = req.headers['x-user-id'] || req.query.userId;
       if (role) {
-        return { user: { id: id ? parseInt(id, 10) : null, username, name, role, department } };
+        return { user: { id: id ? parseInt(id, 10) : null, email, name, role, department } };
       }
     }
 
@@ -102,7 +116,10 @@ module.exports = function createAuth({ db, jwt, permissionModel, JWT_SECRET, ALL
     const cached = userRoleCache.get(user.id);
     if (cached && Date.now() - cached.at < USER_ROLE_TTL_MS) return cached.role;
     try {
-      const { rows } = await db.query('SELECT role FROM users WHERE id = $1', [user.id]);
+      // The session token's `id` is the workos_user_id, which is the users PK. Reading
+      // the live role here is what lets a Super Admin's role change take effect without
+      // the affected user re-logging in.
+      const { rows } = await db.query('SELECT role FROM users WHERE workos_user_id = $1', [user.id]);
       const role = rows[0] ? rows[0].role : user.role;
       userRoleCache.set(user.id, { role, at: Date.now() });
       return role;
@@ -167,7 +184,7 @@ module.exports = function createAuth({ db, jwt, permissionModel, JWT_SECRET, ALL
     if (user.department !== undefined && user.department !== null) return user;
 
     try {
-      const { rows } = await db.query('SELECT department, name FROM users WHERE id = $1', [user.id]);
+      const { rows } = await db.query('SELECT department, name FROM users WHERE workos_user_id = $1', [user.id]);
       if (rows[0]) {
         user.department = rows[0].department;
         user.name = user.name || rows[0].name;

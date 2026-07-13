@@ -1,97 +1,51 @@
 import { API_BASE_URL } from './config';
 
-// Predefined demo credentials matching the roles in the application
-export const DEMO_CREDENTIALS = [
-  {
-    role: "Super Admin",
-    username: "admin",
-    password: "Admin@123",
-    email: "admin@company.com",
-    name: "Admin Operations"
-  },
-  {
-    role: "IT Admin",
-    username: "itadmin",
-    password: "IT@123",
-    email: "itadmin@company.com",
-    name: "IT Operations"
-  },
-  {
-    role: "Facility Admin",
-    username: "facilityadmin",
-    password: "Facility@123",
-    email: "facilityadmin@company.com",
-    name: "Facility Operations"
-  },
-  {
-    role: "Finance Team",
-    username: "finance",
-    password: "Finance@123",
-    email: "finance@company.com",
-    name: "Finance Operations"
-  },
-  {
-    role: "Employee",
-    username: "employee",
-    password: "Employee@123",
-    email: "employee@company.com",
-    name: "Alice Johnson"
-  },
-  {
-    role: "Auditor",
-    username: "auditor",
-    password: "Auditor@123",
-    email: "auditor@company.com",
-    name: "Audit Team"
-  }
-];
-
 export const mockAuthService = {
   /**
-   * Authenticates user against backend API or falls back to local demo credentials.
+   * Embedded WorkOS authentication: posts email + password to the backend, which
+   * authenticates against WorkOS (userManagement.authenticateWithPassword) and sets a
+   * secure HTTP-only session cookie. No hosted redirect. Returns the session on
+   * success; throws an Error (with `.code`) carrying a user-facing message otherwise.
    */
-  login: async (username, password, rememberMe) => {
-    if (!username || !password) {
-      throw new Error("Please enter both username and password.");
-    }
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const session = data.session;
-        // Clear both stores first. Otherwise a token remembered in localStorage
-        // outlives a later sessionStorage login and shadows it in getToken(),
-        // so requests go out signed as the *previous* user.
-        mockAuthService.logout();
-        const storage = rememberMe ? localStorage : sessionStorage;
-        storage.setItem('user_session', JSON.stringify(session));
-        storage.setItem('auth_token', data.token);
-        return session;
-      } else {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Invalid username or password.");
-      }
-    } catch (err) {
-      // Authentication is database-only. The previous offline fallback logged users
-      // in against demo credentials and a localStorage user list — real accounts and
-      // passwords in the browser — which is exactly the mock/local-only auth this
-      // audit removes. If the server is unreachable, surface that rather than
-      // authenticating against client-side data.
-      if (err.message === "Failed to fetch" || err.name === "TypeError") {
-        throw new Error("Cannot reach the authentication server. Please try again in a moment.");
-      }
+  login: async (email, password, rememberMe = false) => {
+    localStorage.setItem('remember_me', rememberMe ? 'true' : 'false');
+    const response = await fetch(`${API_BASE_URL}/auth/login`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const err = new Error(data.error || 'Sign in failed. Please try again.');
+      err.code = data.code;
       throw err;
     }
+    const storage = rememberMe ? localStorage : sessionStorage;
+    storage.setItem('user_session', JSON.stringify(data.session));
+    return data.session;
   },
 
   /**
-   * Restores active session from localStorage or sessionStorage.
+   * Starts a WorkOS-managed password reset. Always resolves (the backend responds
+   * generically so it never reveals whether an email is registered).
+   */
+  forgotPassword: async (email) => {
+    const response = await fetch(`${API_BASE_URL}/auth/forgot-password`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || 'Could not start the password reset. Please try again.');
+    }
+    return data;
+  },
+
+  /**
+   * Restores active session from local cache (localStorage or sessionStorage).
    */
   getCurrentSession: () => {
     const local = localStorage.getItem('user_session');
@@ -114,27 +68,53 @@ export const mockAuthService = {
   },
 
   /**
-   * Reads the JWT from whichever store holds the active session, so the token can
-   * never belong to a different login than the session. Returns null for offline
-   * demo sessions, which have no token.
+   * Fetches fresh session details asynchronously from the backend WorkOS cookie.
+   */
+  fetchSession: async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/session`, { credentials: 'include' });
+      if (response.ok) {
+        const data = await response.json();
+        // Update local caches
+        const rememberMe = localStorage.getItem('remember_me') === 'true';
+        const storage = rememberMe ? localStorage : sessionStorage;
+        storage.setItem('user_session', JSON.stringify(data.session));
+        return data.session;
+      } else {
+        mockAuthService.clearLocalSession();
+        return null;
+      }
+    } catch (err) {
+      console.warn('Session verification failed:', err);
+      return null;
+    }
+  },
+
+  /**
+   * getToken returns null because the session is managed via secure HTTP-only cookies.
    */
   getToken: () => {
-    if (localStorage.getItem('user_session')) {
-      return localStorage.getItem('auth_token');
-    }
-    if (sessionStorage.getItem('user_session')) {
-      return sessionStorage.getItem('auth_token');
-    }
     return null;
   },
 
   /**
-   * Completely terminates session from client storage.
+   * Clears session from local caches.
    */
-  logout: () => {
+  clearLocalSession: () => {
     localStorage.removeItem('user_session');
-    localStorage.removeItem('auth_token');
     sessionStorage.removeItem('user_session');
-    sessionStorage.removeItem('auth_token');
+  },
+
+  /**
+   * Terminate the session. The backend revokes the WorkOS session server-side (no
+   * hosted redirect) and clears the secure cookie; here we clear the local caches.
+   */
+  logout: async () => {
+    try {
+      await fetch(`${API_BASE_URL}/auth/logout`, { method: 'POST', credentials: 'include' });
+    } catch (e) {
+      console.warn('Backend logout call failed:', e);
+    }
+    mockAuthService.clearLocalSession();
   }
 };

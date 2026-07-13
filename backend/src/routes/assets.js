@@ -105,8 +105,8 @@ function register(app, { requireUser, requirePermission, isEmployee, EMPLOYEE_AS
     if (fields.assignedEmployee) {
       try {
         const { rows } = await db.query(
-          `SELECT id FROM users
-           WHERE status = 'Active' AND (LOWER(TRIM(name)) = LOWER(TRIM($1)) OR LOWER(username) = LOWER($1))`,
+          `SELECT workos_user_id AS id FROM users
+           WHERE status = 'Active' AND (LOWER(TRIM(name)) = LOWER(TRIM($1)) OR LOWER(email) = LOWER($1))`,
           [String(fields.assignedEmployee)]
         );
         if (rows.length === 0) {
@@ -215,7 +215,7 @@ function register(app, { requireUser, requirePermission, isEmployee, EMPLOYEE_AS
     }
     try {
       await db.query('DELETE FROM assets WHERE id = ANY($1)', [assetIds]);
-      const actor = req.headers['x-user-username'] || 'Admin';
+      const actor = req.headers['x-user-email'] || 'Admin';
       await db.query(
         `INSERT INTO system_logs (actor, action, detail)
          VALUES ($1, $2, $3)`,
@@ -238,7 +238,7 @@ function register(app, { requireUser, requirePermission, isEmployee, EMPLOYEE_AS
     }
     try {
       await db.query('UPDATE assets SET status = $1 WHERE id = ANY($2)', [status, assetIds]);
-      const actor = req.headers['x-user-username'] || 'Admin';
+      const actor = req.headers['x-user-email'] || 'Admin';
       await db.query(
         `INSERT INTO system_logs (actor, action, detail)
          VALUES ($1, $2, $3)`,

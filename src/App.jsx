@@ -201,7 +201,25 @@ function App() {
   //
   // authKey folds login and logout into one trigger: a real id when signed in, null
   // when signed out.
-  const authKey = currentUser ? (currentUser.id ?? currentUser.username ?? 'session') : null;
+  const authKey = currentUser ? (currentUser.id ?? currentUser.email ?? 'session') : null;
+
+  // On mount, restore the WorkOS session from the backend HTTP-only cookie
+  useEffect(() => {
+    (async () => {
+      const session = await mockAuthService.fetchSession();
+      if (session) {
+        setCurrentUser(session);
+        setCurrentRole(session.role);
+        const hash = window.location.hash.replace('#/', '');
+        setActiveTab(hash && VALID_TABS.includes(hash) ? hash : 'dashboard');
+      } else {
+        setCurrentUser(null);
+        setCurrentRole('Super Admin');
+        window.location.hash = '#/login';
+        setActiveTab('login');
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     // Ignore a response that arrives after the identity changed again (fast
@@ -351,7 +369,7 @@ function App() {
 
     const deletedIds = new Set(deletedUsers.map(u => u.id).filter(id => id != null));
     const deletedNames = new Set(
-      deletedUsers.flatMap(u => [u.name, u.username]).filter(Boolean)
+      deletedUsers.flatMap(u => [u.name, u.email]).filter(Boolean)
     );
     setAssignments(prev => prev.filter(asg => {
       if (asg.userId != null) return !deletedIds.has(asg.userId);
@@ -571,7 +589,7 @@ function App() {
     setFirstLoginLoading(true);
     try {
       if (isApiConnected) {
-        await api.changePassword(currentUser.username, null, firstLoginPassword);
+        await api.changePassword(currentUser.email, null, firstLoginPassword);
       }
       
       const updatedUser = { ...currentUser, passwordResetRequired: false };
@@ -580,7 +598,7 @@ function App() {
       const storage = localStorage.getItem('user_session') ? localStorage : sessionStorage;
       storage.setItem('user_session', JSON.stringify(updatedUser));
 
-      setUsersList(prev => prev.map(u => u.username === currentUser.username ? { ...u, password_reset_required: false } : u));
+      setUsersList(prev => prev.map(u => u.email === currentUser.email ? { ...u, password_reset_required: false } : u));
       setFirstLoginSuccess('Password updated successfully! Redirecting...');
     } catch (err) {
       setFirstLoginError(err.message || 'Failed to change password.');
@@ -638,9 +656,11 @@ function App() {
     }
   }, [currentUser]);
 
-  // Handle Logout
-  const handleLogout = () => {
-    mockAuthService.logout();
+  // Handle Logout. The backend revokes the WorkOS session server-side, so we simply
+  // clear local state and return to the app's own login page — users never see a
+  // WorkOS page.
+  const handleLogout = async () => {
+    await mockAuthService.logout();
     setCurrentUser(null);
     setCurrentRole('Super Admin');
     window.location.hash = '#/login';
@@ -2761,7 +2781,7 @@ function App() {
           {can('userDirectory', 'view') && (
             <button onClick={() => navigate('users')} className={`nav-item ${activeTab === 'users' ? 'active' : ''}`}>
               <Users className="nav-icon" />
-              User Directory
+              User Management
             </button>
           )}
         </nav>
@@ -3662,8 +3682,7 @@ function App() {
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '14px', fontSize: '13px' }}>
                 <div><strong>Employee ID:</strong> {currentUser?.employeeId || 'EMP-' + (currentUser?.id || '001')}</div>
-                <div><strong>Username:</strong> {currentUser?.username || 'admin'}</div>
-                <div><strong>Email:</strong> {currentUser?.email || 'admin@company.com'}</div>
+                <div><strong>Email:</strong> {currentUser?.email || '—'}</div>
                 <div><strong>Phone Number:</strong> {currentUser?.phoneNumber || '—'}</div>
                 <div><strong>Department:</strong> {currentUser?.department || 'Operations'}</div>
                 <div><strong>Designation:</strong> {currentUser?.designation || 'Staff Administrator'}</div>

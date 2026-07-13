@@ -167,22 +167,22 @@ async function technicianDashboard(user, query) {
   const { clause, params } = ticketScope(user, query, 't.');
 
   const { rows } = await db.query(
-    `SELECT t.assigned_to AS id, u.name, u.username, u.department, u.role::text AS role,
+    `SELECT t.assigned_to AS id, u.name, u.department, u.role::text AS role,
        COUNT(*)::int AS assigned,
        COUNT(*) FILTER (WHERE t.status IN ('Resolved','Closed'))::int AS resolved,
        COUNT(*) FILTER (WHERE t.status NOT IN ('Resolved','Closed'))::int AS open_workload,
        COUNT(*) FILTER (WHERE t.status IN ('Resolved','Closed') AND NOT t.resolution_breached)::int AS resolved_on_time,
        COUNT(*) FILTER (WHERE t.escalation_level > 0)::int AS escalated,
        AVG(EXTRACT(EPOCH FROM (t.resolved_at - t.created_at))/3600) FILTER (WHERE t.resolved_at IS NOT NULL) AS avg_resolution_hours
-     FROM tickets t JOIN users u ON u.id = t.assigned_to
+     FROM tickets t JOIN users u ON u.workos_user_id = t.assigned_to
      ${clause ? clause + ' AND' : 'WHERE'} t.assigned_to IS NOT NULL
-     GROUP BY t.assigned_to, u.name, u.username, u.department, u.role`,
+     GROUP BY t.assigned_to, u.name, u.department, u.role`,
     params
   );
 
   const technicians = rows.map((r) => ({
     id: r.id,
-    name: r.name || r.username,
+    name: r.name,
     department: r.department,
     role: r.role,
     assigned: num(r.assigned),

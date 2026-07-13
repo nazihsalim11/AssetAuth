@@ -10,7 +10,6 @@ import { validateAndFormatPhone } from '../../utils/format'
 import { Search, Edit2, Trash2, ChevronLeft, ChevronRight, Layers, RefreshCw, Check, KeyRound, Download } from 'lucide-react'
 
 const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImportClick, addToast, onUsersDeleted, departments = [], canManage = false }) => {
-  const [formUsername, setFormUsername] = useState('');
   const [formPassword, setFormPassword] = useState('');
   const [formName, setFormName] = useState('');
   const [formEmail, setFormEmail] = useState('');
@@ -79,8 +78,8 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
     e.preventDefault();
     setFormError('');
     setFormSuccess('');
-    if (!formUsername.trim() || !formPassword.trim() || !formName.trim() || !formEmail.trim()) {
-      setFormError('Username, password, email, and name are required.');
+    if (!formName.trim() || !formEmail.trim()) {
+      setFormError('Name and email are required.');
       return;
     }
 
@@ -104,15 +103,6 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
       }
     }
 
-    // Uniqueness validation on Username (case-insensitive)
-    if (formUsername.trim()) {
-      const usernameExists = usersList.some(u => String(u.username || '').toLowerCase() === formUsername.trim().toLowerCase());
-      if (usernameExists) {
-        setFormError(`Username '${formUsername.trim()}' already exists. Please use a unique Username.`);
-        return;
-      }
-    }
-
     // Uniqueness validation on Email (case-insensitive)
     if (formEmail.trim()) {
       const emailExists = usersList.some(u => String(u.email || '').toLowerCase() === formEmail.trim().toLowerCase());
@@ -125,8 +115,6 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
     setIsSubmitting(true);
     try {
       const newUserPayload = {
-        username: formUsername.trim(),
-        password: formPassword,
         name: formName.trim(),
         email: formEmail.trim(),
         role: formRole,
@@ -141,12 +129,11 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
       const created = await api.createUser(newUserPayload);
       setUsersList(prev => [created, ...prev]);
 
-      setFormSuccess(`User "${formUsername.trim()}" created successfully!`);
+      setFormSuccess(`User "${formName.trim()}" created successfully!`);
       if (addToast) {
-        addToast("User Registered", `User "${formUsername.trim()}" created successfully!`, "success");
+        addToast("User Registered", `User "${formName.trim()}" created successfully!`, "success");
       }
       setShowRegisterModal(false);
-      setFormUsername('');
       setFormPassword('');
       setFormName('');
       setFormEmail('');
@@ -239,7 +226,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
   );
 
   const handleDeleteUser = async (u) => {
-    if (!window.confirm(`Are you sure you want to permanently delete user "${u.username || u.name}"?`)) return;
+    if (!window.confirm(`Are you sure you want to permanently delete user "${u.name || u.email}"?`)) return;
     try {
       if (isApiConnected) {
         await api.deleteUser(u.id);
@@ -386,9 +373,9 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
 
   const handleExportSelected = () => {
     const selectedUsers = usersList.filter(u => selectedUserIds.includes(u.id));
-    let csv = "Employee ID,Username,Full Name,Email,Phone Number,Department,Designation,Role,Status,Created At\n";
+    let csv = "Employee ID,Full Name,Email,Phone Number,Department,Designation,Role,Status,Created At\n";
     selectedUsers.forEach(u => {
-      csv += `"${u.employeeId || ''}","${u.username || ''}","${u.name || ''}","${u.email || ''}","${u.phoneNumber || ''}","${u.department || ''}","${u.designation || ''}","${u.role || ''}","${u.status || ''}","${u.created_at || ''}"\n`;
+      csv += `"${u.employeeId || ''}","${u.name || ''}","${u.email || ''}","${u.phoneNumber || ''}","${u.department || ''}","${u.designation || ''}","${u.role || ''}","${u.status || ''}","${u.created_at || ''}"\n`;
     });
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
@@ -403,7 +390,6 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
   const filteredUsers = usersList.filter(u => {
     const term = searchTerm.toLowerCase();
     const matchSearch = !searchTerm || 
-      (u.username || '').toLowerCase().includes(term) ||
       (u.name || '').toLowerCase().includes(term) ||
       (u.email || '').toLowerCase().includes(term) ||
       (u.phoneNumber || '').toLowerCase().includes(term) ||
@@ -436,7 +422,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
       <div style={{ width: '100%' }}>
         <div className="page-header" style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div className="page-title-section">
-            <h2 className="page-title">User Directory</h2>
+            <h2 className="page-title">User Management</h2>
             <p className="page-subtitle">
               {filteredUsers.length} registered account{filteredUsers.length !== 1 ? 's' : ''} shown
             </p>
@@ -627,7 +613,6 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
                   />
                 </th>
                 <th>Employee ID</th>
-                <th>Username</th>
                 <th>Full Name</th>
                 <th>Email</th>
                 <th>Phone Number</th>
@@ -639,7 +624,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
             </thead>
             <tbody>
               {visibleUsers.map((u, idx) => (
-                <tr key={u.id || u.username || idx} style={{ cursor: canManage ? 'pointer' : 'default' }} onClick={(e) => {
+                <tr key={u.id || u.email || idx} style={{ cursor: canManage ? 'pointer' : 'default' }} onClick={(e) => {
                   if (canManage && e.target.type !== 'checkbox' && !e.target.closest('button')) {
                     handleEditUserClick(u);
                   }
@@ -652,8 +637,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
                     />
                   </td>
                   <td><strong style={{ fontFamily: 'var(--mono)', fontSize: '11px' }}>{u.employeeId || '—'}</strong></td>
-                  <td><strong style={{ color: 'var(--primary)' }}>{u.username}</strong></td>
-                  <td>{u.name || u.username}</td>
+                  <td><strong>{u.name || u.email}</strong></td>
                   <td style={{ color: 'var(--text-muted)' }}>{u.email || '—'}</td>
                   <td>{u.phoneNumber || '—'}</td>
                   <td>
@@ -766,16 +750,6 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
                   value={formEmployeeId} onChange={e => setFormEmployeeId(e.target.value)} disabled={isSubmitting} />
               </div>
               <div className="form-group">
-                <label className="form-label">Username *</label>
-                <input className="form-input" type="text" placeholder="e.g. john.doe"
-                  value={formUsername} onChange={e => setFormUsername(e.target.value)} autoComplete="off" disabled={isSubmitting} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Password *</label>
-                <input className="form-input" type="password" placeholder="Min. 8 characters"
-                  value={formPassword} onChange={e => setFormPassword(e.target.value)} autoComplete="new-password" disabled={isSubmitting} />
-              </div>
-              <div className="form-group">
                 <label className="form-label">Full Name *</label>
                 <input className="form-input" type="text" placeholder="e.g. John Doe"
                   value={formName} onChange={e => setFormName(e.target.value)} disabled={isSubmitting} />
@@ -783,14 +757,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
               <div className="form-group">
                 <label className="form-label">Email *</label>
                 <input className="form-input" type="email" placeholder="john@company.com"
-                  value={formEmail} onChange={e => {
-                    const val = e.target.value;
-                    setFormEmail(val);
-                    const oldPrefix = formEmail.split('@')[0] || '';
-                    if (!formUsername || formUsername === oldPrefix) {
-                      setFormUsername(val.split('@')[0] || '');
-                    }
-                  }} required disabled={isSubmitting} />
+                  value={formEmail} onChange={e => setFormEmail(e.target.value)} required disabled={isSubmitting} />
               </div>
               <div className="form-group">
                 <label className="form-label">Phone Number</label>
@@ -849,7 +816,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
         <Modal
           isOpen
           onClose={() => setEditingUser(null)}
-          title={<>Edit User: <span style={{ color: 'var(--primary)' }}>{editingUser.username}</span></>}
+          title={<>Edit User: <span style={{ color: 'var(--primary)' }}>{editingUser.name || editingUser.email}</span></>}
           as="form"
           onSubmit={handleEditUserSubmit}
           maxWidth="520px"

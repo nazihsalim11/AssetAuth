@@ -17,7 +17,7 @@ function register(app, { requireUser, requirePermission, isEmployee }) {
         SELECT aa.*, a.name as asset_name, a.category as asset_category
         FROM asset_assignments aa
         JOIN assets a ON aa.asset_id = a.id
-        JOIN users u ON aa.user_id = u.id
+        JOIN users u ON aa.user_id = u.workos_user_id
         ${scoped ? 'WHERE aa.user_id = $1' : ''}
         ORDER BY aa.created_at DESC
       `, scoped ? [user.id] : []);
@@ -29,7 +29,7 @@ function register(app, { requireUser, requirePermission, isEmployee }) {
   });
 
   /* ---------------- Employee asset lookup ----------------
-   * Find an employee by name, employee ID, username or email, then show what they
+   * Find an employee by name, employee ID or email, then show what they
    * currently hold and everything they have ever held.
    */
 
@@ -44,18 +44,18 @@ function register(app, { requireUser, requirePermission, isEmployee }) {
     try {
       if (user.role === 'Employee') {
         const { rows } = await db.query(
-          `SELECT id, name, username, email, employee_id, department, designation, status
-           FROM users WHERE id = $1`,
+          `SELECT workos_user_id AS id, name, email, employee_id, department, designation, status
+           FROM users WHERE workos_user_id = $1`,
           [user.id]
         );
         return res.json(rows);
       }
       const like = `%${q.toLowerCase()}%`;
       const { rows } = await db.query(
-        `SELECT id, name, username, email, employee_id, department, designation, status
+        `SELECT workos_user_id AS id, name, email, employee_id, department, designation, status
          FROM users
          WHERE status = 'Active'
-           AND (LOWER(name) LIKE $1 OR LOWER(username) LIKE $1
+           AND (LOWER(name) LIKE $1
                 OR LOWER(email) LIKE $1 OR LOWER(COALESCE(employee_id, '')) LIKE $1)
          ORDER BY name
          LIMIT 25`,
@@ -73,16 +73,15 @@ function register(app, { requireUser, requirePermission, isEmployee }) {
     const user = requireUser(req, res);
     if (!user) return;
 
-    const targetId = parseInt(req.params.id, 10);
-    if (!Number.isInteger(targetId)) return res.status(400).json({ error: 'Invalid employee id' });
+    const targetId = req.params.id;
     if (user.role === 'Employee' && user.id !== targetId) {
       return res.status(403).json({ error: 'You can only view your own assigned assets.' });
     }
 
     try {
       const employee = await db.query(
-        `SELECT id, name, username, email, employee_id, department, designation, status
-         FROM users WHERE id = $1`,
+        `SELECT workos_user_id AS id, name, email, employee_id, department, designation, status
+         FROM users WHERE workos_user_id = $1`,
         [targetId]
       );
       if (employee.rows.length === 0) return res.status(404).json({ error: 'Employee not found' });
@@ -119,7 +118,7 @@ function register(app, { requireUser, requirePermission, isEmployee }) {
 
     const { assetId, employeeName, quantity, department, notes, date, expectedReturnDate } = req.body;
     const qty = parseInt(quantity) || 1;
-    const actor = req.headers['x-user-username'] || 'Admin';
+    const actor = req.headers['x-user-email'] || 'Admin';
 
     if (!assetId || !employeeName || qty <= 0) {
       return res.status(400).json({ error: 'Asset ID, Employee Name, and positive quantity are required.' });
@@ -141,7 +140,7 @@ function register(app, { requireUser, requirePermission, isEmployee }) {
         return res.status(400).json({ error: `Insufficient stock. Available: ${asset.available_quantity}, Requested: ${qty}` });
       }
 
-      const userRes = await client.query('SELECT id, name FROM users WHERE LOWER(name) = LOWER($1) OR LOWER(username) = LOWER($1)', [employeeName]);
+      const userRes = await client.query('SELECT workos_user_id AS id, name FROM users WHERE LOWER(name) = LOWER($1) OR LOWER(email) = LOWER($1)', [employeeName]);
       if (userRes.rows.length === 0) {
         await client.query('ROLLBACK');
         return res.status(400).json({ error: `Employee "${employeeName}" does not exist in the user directory.` });
@@ -216,7 +215,7 @@ function register(app, { requireUser, requirePermission, isEmployee }) {
 
     const { id } = req.params;
     const { targetType, employeeName, department, location, date, notes } = req.body;
-    const actor = req.headers['x-user-username'] || actingUser.username || 'Admin';
+    const actor = req.headers['x-user-email'] || actingUser.email || 'Admin';
     const when = date || new Date();
 
     if (targetType !== 'employee' && targetType !== 'department') {
@@ -257,8 +256,8 @@ function register(app, { requireUser, requirePermission, isEmployee }) {
           return res.status(400).json({ error: 'employeeName is required for a custodian transfer.' });
         }
         const userRes = await client.query(
-          `SELECT id, name FROM users
-           WHERE status = 'Active' AND (LOWER(TRIM(name)) = LOWER(TRIM($1)) OR LOWER(username) = LOWER($1))`,
+          `SELECT workos_user_id AS id, name FROM users
+            WHERE status = 'Active' AND (LOWER(TRIM(name)) = LOWER(TRIM($1)) OR LOWER(email) = LOWER($1))`,
           [String(employeeName)]
         );
         if (userRes.rows.length === 0) {
@@ -363,7 +362,7 @@ function register(app, { requireUser, requirePermission, isEmployee }) {
     const { id } = req.params;
     const { quantity, notes } = req.body;
     const returnQty = parseInt(quantity) || null;
-    const actor = req.headers['x-user-username'] || 'Admin';
+    const actor = req.headers['x-user-email'] || 'Admin';
 
     const client = await db.pool.connect();
     try {
@@ -444,7 +443,7 @@ function register(app, { requireUser, requirePermission, isEmployee }) {
 
     const { id } = req.params;
     const { quantity, employeeName, department, notes } = req.body;
-    const actor = req.headers['x-user-username'] || 'Admin';
+    const actor = req.headers['x-user-email'] || 'Admin';
 
     const client = await db.pool.connect();
     try {
@@ -476,7 +475,7 @@ function register(app, { requireUser, requirePermission, isEmployee }) {
       let userId = assignment.user_id;
       let employeeNameDb = employeeName;
       if (employeeName) {
-        const userRes = await client.query('SELECT id, name FROM users WHERE LOWER(name) = LOWER($1) OR LOWER(username) = LOWER($1)', [employeeName]);
+        const userRes = await client.query('SELECT workos_user_id AS id, name FROM users WHERE LOWER(name) = LOWER($1) OR LOWER(email) = LOWER($1)', [employeeName]);
         if (userRes.rows.length === 0) {
           await client.query('ROLLBACK');
           return res.status(400).json({ error: `Employee "${employeeName}" does not exist in the user directory.` });

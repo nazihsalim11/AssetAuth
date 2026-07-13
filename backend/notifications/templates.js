@@ -317,7 +317,7 @@ const templates = {
     email:
       `A user account has been created.\n\n` +
       `Name:       ${c.name}\n` +
-      `Username:   ${c.username}\n` +
+      `Email:      ${c.email}\n` +
       `Role:       ${c.role}\n` +
       `Department: ${c.department || 'unassigned'}\n` +
       `Created by: ${c.actor}\n\n— AssetFlow Directory`,
@@ -330,7 +330,7 @@ const templates = {
     inApp: `${c.actor} changed ${c.name}'s role from ${c.previousRole} to ${c.newRole}`,
     email:
       `A user's role has changed. Roles grant permissions, so this is worth reviewing.\n\n` +
-      `User:       ${c.name} (${c.username})\n` +
+      `User:       ${c.name} (${c.email})\n` +
       `Previously: ${c.previousRole}\n` +
       `Now:        ${c.newRole}\n` +
       `Changed by: ${c.actor}\n\n— AssetFlow Directory`,
@@ -344,24 +344,24 @@ const templates = {
     email:
       `A user account has been removed. Any assets they held are now unassigned.\n\n` +
       `Name:       ${c.name}\n` +
-      `Username:   ${c.username}\n` +
+      `Email:      ${c.email}\n` +
       `Role:       ${c.role}\n` +
       `Removed by: ${c.actor}\n\n— AssetFlow Directory`,
-    sms: `AssetFlow: account ${c.username} removed by ${c.actor}`
+    sms: `AssetFlow: account ${c.email} removed by ${c.actor}`
   }),
 
   /* ----------------------------------------------------------- security */
 
   'security.password_changed': (c) => ({
     type: 'warning',
-    subject: `Password changed for ${c.username}`,
-    inApp: `Password changed for ${c.username}`,
+    subject: `Password changed for ${c.email}`,
+    inApp: `Password changed for ${c.email}`,
     email:
       `The password for an account has been changed.\n\n` +
-      `Account: ${c.username}\n` +
+      `Account: ${c.email}\n` +
       `When:    ${c.at}\n\n` +
       `If this was not expected, treat the account as compromised and reset it.\n\n— AssetFlow Security`,
-    sms: `AssetFlow: password changed for ${c.username}`
+    sms: `AssetFlow: password changed for ${c.email}`
   }),
 
   'security.permissions_changed': (c) => ({
