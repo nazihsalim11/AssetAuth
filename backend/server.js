@@ -2,9 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const cron = require('node-cron');
-const db = require('./db');
-const { runMigrations } = require('./migrations');
-const { createBaseTables, seedData } = require('./seed');
+const { cm } = require('./convexApi');
 const storage = require('./storage');
 const notifications = require('./notifications');
 const scheduler = require('./notifications/scheduler');
@@ -223,7 +221,7 @@ const CRON_SECRET = process.env.CRON_SECRET || '';
 
 registerCronRoutes(app, { scheduler, notifications, reports, secret: CRON_SECRET });
 
-// Chron scheduler is initialized asynchronously inside runMigrations.then
+// Cron scheduler is initialized after the routes are registered (see the bottom of file).
 
 // --- KNOWLEDGE BASE + HELPDESK OPTIONS ---
 // Registered before the catch-all so its routes are reachable.
@@ -241,62 +239,18 @@ app.post('/api/admin/reset', async (req, res) => {
     return res.status(403).json({ error: 'Access denied: Only Super Admin can perform system reset.' });
   }
 
+  // The frontend still sends a confirmation password. WorkOS owns credentials now, so there
+  // is no local hash to verify against — the destructive action is gated by the Super Admin
+  // session (requirePermission above) plus the explicit role check. Keep requiring the field
+  // so the confirm dialog contract is unchanged.
   const { password } = req.body;
   if (!password) {
     return res.status(400).json({ error: 'Password confirmation is required.' });
   }
 
-  const bcrypt = require('bcryptjs');
-
   try {
-    const result = await db.query('SELECT password_hash FROM users WHERE id = $1', [user.id]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Super Admin user not found.' });
-    }
-
-    const isMatch = await bcrypt.compare(password, result.rows[0].password_hash);
-    if (!isMatch) {
-      return res.status(401).json({ error: 'Incorrect password.' });
-    }
-
     console.log('=== SYSTEM RESET INITIATED BY SUPER ADMIN ===');
-
-    // Perform the truncation/deletion of all business data
-    const resetQueries = `
-      BEGIN;
-      TRUNCATE assets, amcs, invoices, asset_assignments, movements, documents, 
-               notifications, notification_deliveries, emails, notification_preferences, 
-               notification_recipients, kb_categories, kb_articles, kb_article_attachments, 
-               kb_related_articles, purchase_orders, purchase_order_items, purchase_order_attachments, 
-               purchase_order_documents, calendar_holidays, scheduled_reports, import_jobs, 
-               departments, locations, vendors, system_logs CASCADE;
-      DELETE FROM auth.users WHERE email != 'admin@company.com';
-      DELETE FROM users WHERE role != 'Super Admin';
-      COMMIT;
-    `;
-    
-    await db.query(resetQueries);
-
-    // Write the system reset event to system_logs AFTER truncate so it's preserved
-    await db.query(
-      'INSERT INTO system_logs (timestamp, actor, action, detail) VALUES ($1, $2, $3, $4)',
-      [new Date().toISOString(), user.name || user.email, 'SYSTEM_RESET', 'System reset completed. All other business data wiped.']
-    );
-
-    // Trigger Convex sync manually for all affected tables to ensure Convex matches PGlite exactly
-    const TABLES_TO_SYNC = [
-      'assets', 'amcs', 'invoices', 'asset_assignments', 'movements', 'documents', 
-      'notifications', 'notification_deliveries', 'emails', 'notification_preferences', 
-      'notification_recipients', 'kb_categories', 'kb_articles', 'kb_article_attachments', 
-      'kb_related_articles', 'purchase_orders', 'purchase_order_items', 'purchase_order_attachments', 
-      'purchase_order_documents', 'calendar_holidays', 'scheduled_reports', 'import_jobs', 
-      'departments', 'locations', 'vendors', 'users', 'system_logs'
-    ];
-
-    for (const table of TABLES_TO_SYNC) {
-      await db.syncTableToConvex(table);
-    }
-
+    await cm('system:reset', { actor: user.name || user.email });
     console.log('=== SYSTEM RESET COMPLETED SUCCESSFULLY ===');
     res.json({ success: true, message: 'System reset completed successfully. All data wiped.' });
   } catch (err) {
@@ -319,34 +273,31 @@ app.use((err, req, res, _next) => {
 });
 
 const PORT = process.env.PORT || 5000;
-createBaseTables().then(() => runMigrations()).then(() => seedData()).then(async () => {
-  await db.loadFromConvex();
 
-  if (INTERNAL_CRON_ENABLED) {
-    const runStartupChecks = async () => {
-      await scheduler.runDailyChecks();
-      await scheduler.runSlaChecks();
-    };
+// Convex is the datastore — there is no local schema to create/migrate/seed and nothing to
+// hydrate on boot, so the server starts immediately. convexApi connects lazily on first use.
+if (INTERNAL_CRON_ENABLED) {
+  const runStartupChecks = async () => {
+    await scheduler.runDailyChecks();
+    await scheduler.runSlaChecks();
+  };
 
-    runStartupChecks().catch((err) => console.error('Startup notification checks failed:', err));
+  runStartupChecks().catch((err) => console.error('Startup notification checks failed:', err));
 
-    cron.schedule('0 0 * * *', () => scheduler.runDailyChecks());   // 00:00 daily
-    cron.schedule('0 * * * *', () => scheduler.runSlaChecks());     // hourly, on the hour
-    cron.schedule('*/15 * * * *', () => {                            // retry failed sends
-      notifications.retryFailed().catch((err) => console.error('Notification retry failed:', err));
-    });
-    cron.schedule('0 6 * * *', () => {                               // 06:00 daily: email due reports
-      reports.runDueScheduledReports().catch((err) => console.error('Scheduled reports failed:', err));
-    });
-  } else if (!CRON_SECRET) {
-    // Loud, because the alternative is a deployment where nothing is scheduled at all
-    // and the first anyone hears of it is a missed SLA.
-    console.error('[cron] DISABLE_INTERNAL_CRON=true but CRON_SECRET is unset: no job can run, in-process or over HTTP.');
-  } else {
-    console.log('[cron] in-process scheduler disabled; expecting external triggers on /api/internal/cron/*');
-  }
+  cron.schedule('0 0 * * *', () => scheduler.runDailyChecks());   // 00:00 daily
+  cron.schedule('0 * * * *', () => scheduler.runSlaChecks());     // hourly, on the hour
+  cron.schedule('*/15 * * * *', () => {                            // retry failed sends
+    notifications.retryFailed().catch((err) => console.error('Notification retry failed:', err));
+  });
+  cron.schedule('0 6 * * *', () => {                               // 06:00 daily: email due reports
+    reports.runDueScheduledReports().catch((err) => console.error('Scheduled reports failed:', err));
+  });
+} else if (!CRON_SECRET) {
+  // Loud, because the alternative is a deployment where nothing is scheduled at all and the
+  // first anyone hears of it is a missed SLA.
+  console.error('[cron] DISABLE_INTERNAL_CRON=true but CRON_SECRET is unset: no job can run, in-process or over HTTP.');
+} else {
+  console.log('[cron] in-process scheduler disabled; expecting external triggers on /api/internal/cron/*');
+}
 
-  app.listen(PORT, () => console.log(`Backend server running on port ${PORT}`));
-}).catch(err => {
-  console.error('Server startup failed due to migration failure:', err);
-});
+app.listen(PORT, () => console.log(`Backend server running on port ${PORT}`));

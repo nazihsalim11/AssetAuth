@@ -104,17 +104,26 @@ verify with `convex run` → commit.
 
 ---
 
-## ⬜ Teardown (where the Render memory win actually lands)
+## ✅ Teardown (where the Render memory win actually lands) — code done, needs boot-test
 
-- [ ] Remove PGlite + the Convex mirror sync from `db.js` (loadFromConvex /
-      syncTableToConvex / setupRealtimeSync / handlePostQuerySync).
-- [ ] Delete/neutralize `seed.js` and `migrations.js` (SQL schema no longer used).
-- [ ] `server.js` — drop the `db` wiring, `DISABLE_REALTIME_SYNC`, and DB bootstrap.
-- [ ] Drop Supabase remnants: `storage.js`, `src/routes/files.js`, `cronAuth.js`,
-      `cronRoutes.js` (audit each for Supabase/Postgres usage).
-- [ ] Prune one-off scripts if obsolete: `migrateToConvex.js`, `wipeConvex.js`,
-      `migrateDropUsername.js` (keep `createAdmin.js` if still used for bootstrap).
-- [ ] Remove `pg` / `@electric-sql/pglite` from `package.json` deps.
+- [x] Removed PGlite + the mirror sync — **deleted `db.js`** entirely (only `server.js` /
+      `migrations.js` / `seed.js` still imported it; every module was already on `convexApi`).
+- [x] **Deleted `seed.js` and `migrations.js`** (SQL schema no longer used — Convex is the store).
+- [x] `server.js` — dropped the `db` require + the `createBaseTables → runMigrations → seedData
+      → loadFromConvex` boot chain (server now `app.listen`s immediately; convexApi connects
+      lazily). The system-reset endpoint now calls a Convex `system:reset` mutation
+      (`convex/system.js`) instead of a PGlite TRUNCATE. **Behaviour change:** the reset's
+      bcrypt `password_hash` confirmation is gone (WorkOS owns credentials; the Super-Admin
+      session + role gate is the guard) — the `password` field is still required for the
+      dialog contract but no longer verified. Flag for review.
+- [ ] Supabase remnants (`storage.js`, `src/routes/files.js`, `cronAuth.js`, `cronRoutes.js`)
+      — **left as-is**: none touch db/pg/pglite (they're Supabase *storage*, a separate audit).
+- [x] Pruned obsolete one-off scripts: deleted `migrateToConvex.js` (used `pg`; the one-time
+      PGlite→Convex import) + `migrateDropUsername.js` (completed) and the `migrate:convex`
+      npm script. **Kept** `wipeConvex.js` (still-useful convexApi dev utility) + `createAdmin.js`.
+- [x] Removed `pg` / `@electric-sql/pglite` from `package.json` deps (+ updated description).
+      ⚠️ Run `npm install` (or `npm prune`) so they actually leave `node_modules` — that is
+      where the RAM drops. `bcryptjs` left in deps (small; verify no other user before removing).
 
 ---
 

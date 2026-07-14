@@ -1,12 +1,11 @@
 {
   "name": "asset-tracking-backend",
   "version": "1.0.0",
-  "description": "PostgreSQL API Backend for AssetFlow Enterprise Asset Tracking",
+  "description": "Convex API Backend for AssetFlow Enterprise Asset Tracking",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "migrate:convex": "node migrateToConvex.js",
     "wipe:convex": "node wipeConvex.js",
     "cleanup:orphans": "node cleanupOrphans.js",
     "cleanup:orphans:dry": "node cleanupOrphans.js --dry-run"
@@ -15,7 +14,6 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@electric-sql/pglite": "^0.5.4",
     "@workos-inc/node": "^10.7.0",
     "bcryptjs": "^3.0.3",
     "convex": "^1.42.1",
@@ -26,7 +24,6 @@
     "multer": "^2.2.0",
     "node-cron": "^4.6.0",
     "nodemailer": "^9.0.3",
-    "pg": "^8.12.0",
     "twilio": "^6.0.2"
   }
 }
