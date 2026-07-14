@@ -21,6 +21,7 @@ import type * as knowledgeBase from "../knowledgeBase.js";
 import type * as logs from "../logs.js";
 import type * as masters from "../masters.js";
 import type * as movements from "../movements.js";
+import type * as notifications from "../notifications.js";
 import type * as permissions from "../permissions.js";
 import type * as purchaseOrders from "../purchaseOrders.js";
 import type * as reports from "../reports.js";
@@ -49,6 +50,7 @@ declare const fullApi: ApiFromModules<{
   logs: typeof logs;
   masters: typeof masters;
   movements: typeof movements;
+  notifications: typeof notifications;
   permissions: typeof permissions;
   purchaseOrders: typeof purchaseOrders;
   reports: typeof reports;

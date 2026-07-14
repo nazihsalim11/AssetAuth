@@ -80,10 +80,21 @@ verify with `convex run` → commit.
       resolves the department scope and calls `cq('dashboards:*')`. Also added the four
       `ticket*` tables to the `TABLES` mirror list in `db.js` so ticket data actually
       flows to Convex (they were absent, so the ticket dashboards read empty).
-- [ ] **notifications** — `src/routes/notifications.js` (~402) **and** the notify engine
-      `backend/notifications.js`. Central: already-converted modules (invoices,
-      permissions) call `notifications.notify()`, which still writes PGlite during the
-      hybrid phase. Covers templates / deliveries / preferences / recipients / scheduler.
+- [~] **notifications** — dispatcher `notifications/index.js` ✅ + route
+      `src/routes/notifications.js` ✅ converted. `convex/notifications.js` owns settings,
+      per-event preferences + recipient rules, the delivery ledger with its **dedup claim**
+      (emulating the ON CONFLICT unique index in serializable mutations), in-app bell feed,
+      email inbox mirror (event_key-deduped), and admin read APIs. `templates.js` /
+      `notificationPolicy.js` / channels are pure (untouched). **Fix:** recipients now keyed
+      by `workos_user_id` throughout (the old engine mixed numeric users.id, which never
+      matched the per-user filters — targeted notifications were effectively invisible).
+      `notifications.notify()` is now fully Convex, so every module that calls it is off the
+      PGlite seam. Verified (14 assertions): recipient resolution, dedup, configured-audience
+      override, email mirror dedup, CRUD, retry.
+      Remaining: `notifications/scheduler.js` (~506) — lifecycle reminder digests + the SLA
+      breach/escalation sweep (still on PGlite; also closes the deferred tickets seam).
+      **NOTE:** live SMTP delivery + cron wiring unchanged but untested here — needs a
+      real-app smoke test.
 - [x] **cleanupOrphans** — `cleanupOrphans.js` (~196, ~9). Scan/repair moved into
       `convex/cleanupOrphans.js` (`audit` query + `fix` mutation); the obsolete
       `users -> auth.users` (Supabase) scan was dropped.
