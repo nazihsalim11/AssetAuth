@@ -8,10 +8,12 @@
  * @module
  */
 
+import type * as amc from "../amc.js";
 import type * as assets from "../assets.js";
 import type * as assignments from "../assignments.js";
 import type * as documents from "../documents.js";
 import type * as generic from "../generic.js";
+import type * as invoices from "../invoices.js";
 import type * as logs from "../logs.js";
 import type * as masters from "../masters.js";
 import type * as movements from "../movements.js";
@@ -26,10 +28,12 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  amc: typeof amc;
   assets: typeof assets;
   assignments: typeof assignments;
   documents: typeof documents;
   generic: typeof generic;
+  invoices: typeof invoices;
   logs: typeof logs;
   masters: typeof masters;
   movements: typeof movements;
