@@ -1,31 +1,28 @@
 const { randomUUID } = require('crypto');
-const bcrypt = require('bcryptjs');
-const db = require('../../db');
+const { cq, cm } = require('../../convexApi');
 const notifications = require('../../notifications');
 const validateAndFormatPhone = require('../utils/phone');
 
-/* ---------------- Employee bulk import ----------------
- * The old handler ran ~4 sequential queries plus a blocking bcrypt hash per row
- * inside the request. Against a remote pool (~186ms RTT) that is ~900ms/employee,
- * so ~34 employees exceeded the client's 30s timeout even though the import
- * itself completed. Two changes fix it:
+/* ---------------- Bulk import (employees + assets) ----------------
+ * Backed by native Convex. Employee imports run as a background job: the request returns
+ * a jobId at once and the client polls for progress, so a large import can never time out.
  *
- *   1. The work runs as a background job. The request returns a jobId at once and
- *      the client polls for progress, so no import can ever time out.
- *   2. Duplicate checks are batched into set lookups and the inserts are chunked
- *      multi-row statements, cutting hundreds of round trips down to a handful.
+ * Validation, WorkOS user creation and master-data checks happen here; the actual inserts
+ * are committed by atomic batch mutations (convex/imports.js) — one per chunk — which also
+ * do the final duplicate guard and report a per-row outcome.
  *
- * `importKey` is a client-supplied idempotency key: retrying a timed-out import
- * returns the original job instead of importing the same people twice.
+ * `importKey` is a client-supplied idempotency key: retrying a timed-out import returns the
+ * original job instead of importing the same people twice.
  */
 
 const IMPORT_CHUNK_SIZE = 100;
 const VALID_ROLES = ['Super Admin', 'IT Admin', 'Facility Admin', 'Finance Team', 'Employee', 'Auditor'];
-const DEFAULT_TEMP_PASSWORD = 'Password@123';
+
+const strip = (d) => { if (!d) return d; const { _id, _creationTime, ...rest } = d; return rest; };
 
 const getImportJob = async (jobId) => {
-  const r = await db.query('SELECT * FROM import_jobs WHERE id = $1', [jobId]);
-  return r.rows[0] || null;
+  const job = await cq('generic:get', { table: 'import_jobs', idField: 'id', idVal: jobId });
+  return job ? strip(job) : null;
 };
 
 const serializeJob = (job) => ({
@@ -39,21 +36,26 @@ const serializeJob = (job) => ({
   error: job.error
 });
 
-// Progress is written on a pooled connection, not the import's transaction,
-// so pollers can see it before the import commits.
+const updateJob = async (jobId, patch) =>
+  cm('generic:update', { table: 'import_jobs', idField: 'id', idVal: jobId, patch: { ...patch, updated_at: new Date().toISOString() } });
+
+// Progress is a best-effort write so pollers see movement mid-import.
 const setImportProgress = async (jobId, processed) => {
   try {
-    await db.query('UPDATE import_jobs SET processed = $1, updated_at = NOW() WHERE id = $2', [processed, jobId]);
+    await updateJob(jobId, { processed });
   } catch (err) {
     console.warn(`Could not update progress for import job ${jobId}:`, err.message);
   }
 };
 
 const finishImportJob = async (jobId, status, summary, error) => {
-  await db.query(
-    'UPDATE import_jobs SET status = $1, summary = $2, error = $3, processed = COALESCE($4, processed), updated_at = NOW() WHERE id = $5',
-    [status, summary ? JSON.stringify(summary) : null, error || null, summary ? summary.total : null, jobId]
-  );
+  const patch = { status, error: error || null };
+  if (summary) { patch.summary = summary; patch.processed = summary.total; }
+  try {
+    await updateJob(jobId, patch);
+  } catch (err) {
+    console.error(`Could not finalize import job ${jobId}:`, err.message);
+  }
 };
 
 const validateEmployeeRow = (emp) => {
@@ -84,23 +86,6 @@ const validateEmployeeRow = (emp) => {
   return { errors, formattedPhone, targetRole };
 };
 
-// Builds the VALUES tail of a multi-row INSERT plus its flat parameter list.
-// `template` maps a row's placeholder names to a tuple, so literal columns can be
-// inlined. Placeholders inside a plain `INSERT ... VALUES` take their type from the
-// target column, which matters because users.role is a `user_role` enum: routing the
-// rows through `SELECT ... FROM (VALUES ...)` instead yields `text` and fails to cast.
-const buildMultiRowValues = (rows, template) => {
-  const params = [];
-  const tuples = rows.map((row) => {
-    const placeholders = row.map((value) => {
-      params.push(value);
-      return `$${params.length}`;
-    });
-    return template(placeholders);
-  });
-  return { text: tuples.join(', '), params };
-};
-
 const { WorkOS } = require('@workos-inc/node');
 const emailChannel = require('../../notifications/channels/email');
 const workos = process.env.WORKOS_API_KEY ? new WorkOS(process.env.WORKOS_API_KEY) : null;
@@ -123,35 +108,20 @@ async function sendImportResetLink(email) {
   }
 }
 
-const insertUserChunk = async (client, chunk) => {
-  const userRows = chunk.map((u) => [
-    u.authId, u.name, u.role, u.email, u.employeeId,
-    u.phoneNumber, u.department, u.designation, u.status
-  ]);
-  const userValues = buildMultiRowValues(userRows, (p) => `(${p.join(', ')})`);
-  await client.query(
-    `INSERT INTO users (
-       workos_user_id, name, role, email, employee_id,
-       phone_number, department, designation, status
-     ) VALUES ${userValues.text}`,
-    userValues.params
-  );
-};
-
 async function processEmployeeImport(jobId, employees) {
   const summary = { total: employees.length, success: 0, failed: 0, duplicate: 0, errors: [] };
-  const client = await db.pool.connect();
 
   try {
-    const existing = await client.query(
-      'SELECT LOWER(employee_id) AS eid, LOWER(email) AS email FROM users'
-    );
-    const takenEmployeeIds = new Set(existing.rows.map((r) => r.eid).filter(Boolean));
-    const takenEmails = new Set(existing.rows.map((r) => r.email).filter(Boolean));
+    const [users, deptMaster] = await Promise.all([
+      cq('users:list', {}),
+      cq('masters:list', { table: 'departments' }) // active departments only
+    ]);
+    const takenEmployeeIds = new Set(users.map((u) => String(u.employee_id || '').toLowerCase()).filter(Boolean));
+    const takenEmails = new Set(users.map((u) => String(u.email || '').toLowerCase()).filter(Boolean));
+    const validDepartments = new Set(deptMaster.map((d) => String(d.name).toLowerCase()));
 
-    const deptMaster = await client.query('SELECT LOWER(name) AS name FROM departments WHERE is_active');
-    const validDepartments = new Set(deptMaster.rows.map((r) => r.name));
-
+    // Validate, dedupe (against the snapshot) and create the WorkOS user for each row that
+    // survives, building the docs to commit.
     const prepared = [];
     for (let i = 0; i < employees.length; i++) {
       const rowNum = i + 1;
@@ -179,19 +149,14 @@ async function processEmployeeImport(jobId, employees) {
         summary.errors.push({ row: rowNum, employeeId, error: `Email "${email}" already exists` });
         continue;
       }
-
       takenEmployeeIds.add(employeeId.toLowerCase());
       takenEmails.add(email.toLowerCase());
 
-      // Create on WorkOS or fallback to mock UUID
       let authId = null;
       if (workos) {
         try {
           const workosUser = await workos.userManagement.createUser({
-            email,
-            emailVerified: true,
-            firstName: firstName || '',
-            lastName: lastName || '',
+            email, emailVerified: true, firstName: firstName || '', lastName: lastName || '',
           });
           authId = workosUser.id;
         } catch (workosErr) {
@@ -203,91 +168,61 @@ async function processEmployeeImport(jobId, employees) {
       }
 
       prepared.push({
-        rowNum,
-        authId,
-        name: `${firstName} ${lastName}`,
-        role: targetRole,
+        _ref: rowNum,
+        employeeId, // kept for reset-link bookkeeping, stripped before insert below
         email,
-        employeeId,
-        phoneNumber: formattedPhone || '',
-        department: department || '',
-        designation: designation || '',
-        status: status || 'Active',
+        authId,
+        doc: {
+          _ref: rowNum,
+          workos_user_id: authId,
+          name: `${firstName} ${lastName}`,
+          role: targetRole,
+          email,
+          employee_id: employeeId,
+          phone_number: formattedPhone || '',
+          department: department || '',
+          designation: designation || '',
+          status: status || 'Active',
+        }
       });
     }
 
-    const recordSuccess = (u) => {
+    const byRef = new Map(prepared.map((p) => [p._ref, p]));
+    const recordSuccess = (ref) => {
       summary.success++;
-      if (workos && u.authId && !u.authId.startsWith('mock-')) {
-        sendImportResetLink(u.email);
-      }
+      const p = byRef.get(ref);
+      if (p && workos && p.authId && !p.authId.startsWith('mock-')) sendImportResetLink(p.email);
     };
 
-    await client.query('BEGIN');
-
+    // Commit in chunks; each chunk is one atomic mutation. Progress ticks per chunk.
     for (let i = 0; i < prepared.length; i += IMPORT_CHUNK_SIZE) {
       const chunk = prepared.slice(i, i + IMPORT_CHUNK_SIZE);
-      await client.query('SAVEPOINT chunk_sp');
-      try {
-        await insertUserChunk(client, chunk);
-        await client.query('RELEASE SAVEPOINT chunk_sp');
-        chunk.forEach(recordSuccess);
-      } catch (chunkErr) {
-        await client.query('ROLLBACK TO SAVEPOINT chunk_sp');
-        console.warn(`Chunk insert failed, retrying ${chunk.length} rows individually:`, chunkErr.message);
-        for (let k = 0; k < chunk.length; k++) {
-          const u = chunk[k];
-          await client.query('SAVEPOINT row_sp');
-          try {
-            await insertUserChunk(client, [u]);
-            await client.query('RELEASE SAVEPOINT row_sp');
-            recordSuccess(u);
-          } catch (rowErr) {
-            await client.query('ROLLBACK TO SAVEPOINT row_sp');
-            console.error(`Error importing row ${u.rowNum} (${u.employeeId}):`, rowErr.message);
-            summary.failed++;
-            summary.errors.push({ row: u.rowNum, employeeId: u.employeeId, error: rowErr.message });
-          }
-          if (k % 10 === 9) await setImportProgress(jobId, i + k + 1);
-        }
+      const results = await cm('imports:insertUsers', { docs: chunk.map((p) => p.doc) });
+      for (const r of results) {
+        if (r.status === 'success') recordSuccess(r.ref);
+        else { summary.duplicate++; summary.errors.push({ row: r.ref, employeeId: byRef.get(r.ref)?.employeeId, error: r.error }); }
       }
       await setImportProgress(jobId, Math.min(i + chunk.length, prepared.length));
     }
 
-    await client.query(
-      `INSERT INTO system_logs (actor, action, detail) VALUES ($1, $2, $3)`,
-      [
-        'Admin',
-        'Employee Bulk Import',
-        `Imported employees. Total: ${summary.total}, Success: ${summary.success}, Failed: ${summary.failed}, Duplicate: ${summary.duplicate}`
-      ]
-    );
-
-    // Keyed on the import job, so a retried request does not re-notify.
-    notifications.notify('system.bulk_import_completed', `import:employees:${jobId}`, {
-      kind: 'employee',
-      total: summary.total,
-      success: summary.success,
-      failed: summary.failed,
-      duplicate: summary.duplicate,
-      // This runs in a background worker, with no request in scope. The matching
-      // system_logs row records 'Admin' for the same reason.
-      actor: 'Admin'
+    await cm('logs:add', {
+      actor: 'Admin',
+      action: 'Employee Bulk Import',
+      detail: `Imported employees. Total: ${summary.total}, Success: ${summary.success}, Failed: ${summary.failed}, Duplicate: ${summary.duplicate}`
     });
 
-    await client.query('COMMIT');
+    // Keyed on the import job so a retried request does not re-notify. Runs in a background
+    // worker with no request in scope, hence the 'Admin' actor (as with the system_logs row).
+    notifications.notify('system.bulk_import_completed', `import:employees:${jobId}`, {
+      kind: 'employee', total: summary.total, success: summary.success,
+      failed: summary.failed, duplicate: summary.duplicate, actor: 'Admin'
+    });
+
     summary.errors.sort((a, b) => a.row - b.row);
     await finishImportJob(jobId, 'completed', summary);
   } catch (err) {
-    try {
-      await client.query('ROLLBACK');
-    } catch {
-      /* connection may already be gone */
-    }
-    console.error('Employee import transaction failed:', err);
+    console.error('Employee import failed:', err);
     await finishImportJob(jobId, 'failed', null, err.message);
-  } finally {
-    client.release();
   }
 }
 
@@ -307,23 +242,16 @@ function register(app) {
     const jobId = randomUUID();
 
     try {
-      const created = await db.query(
-        `INSERT INTO import_jobs (id, import_key, type, status, total, processed)
-         VALUES ($1, $2, 'employees', 'running', $3, 0)
-         ON CONFLICT (import_key) DO NOTHING
-         RETURNING *`,
-        [jobId, key, employees.length]
-      );
+      const { job, reused } = await cm('imports:jobCreate', { id: jobId, importKey: key, type: 'employees', total: employees.length });
 
-      if (created.rows.length === 0) {
+      if (reused) {
         // This key has been used before: hand back the original job rather than
         // importing the same people a second time.
-        const existing = await db.query('SELECT * FROM import_jobs WHERE import_key = $1', [key]);
-        return res.status(200).json({ ...serializeJob(existing.rows[0]), reused: true });
+        return res.status(200).json({ ...serializeJob(job), reused: true });
       }
 
       // Respond before the work begins; the client polls the job for progress.
-      res.status(202).json({ ...serializeJob(created.rows[0]), reused: false });
+      res.status(202).json({ ...serializeJob(job), reused: false });
 
       processEmployeeImport(jobId, employees).catch(async (err) => {
         console.error('Unhandled employee import failure:', err);
@@ -354,38 +282,27 @@ function register(app) {
       return res.status(400).json({ error: 'Payload must contain an assets array' });
     }
 
-    const client = await db.pool.connect();
-    const summary = {
-      total: assets.length,
-      success: 0,
-      failed: 0,
-      duplicate: 0,
-      errors: []
-    };
+    const summary = { total: assets.length, success: 0, failed: 0, duplicate: 0, errors: [] };
 
     try {
-      await client.query('BEGIN');
-      const batchAssetIds = new Set();
-
-      // Load the master data once so every category exposes all of its valid Item
-      // Types. A subtype in the sheet is validated against this set rather than being
-      // overwritten with a hard-coded value.
-      const subtypeRows = await client.query('SELECT category, LOWER(name) AS name FROM asset_subtypes');
-      const validSubtypes = {};
-      for (const r of subtypeRows.rows) (validSubtypes[r.category] = validSubtypes[r.category] || new Set()).add(r.name);
-
-      // Department & Location masters, loaded once. A value in the sheet is validated
-      // against the active master (the single source of truth) — the importer honours the
-      // masters exactly like the in-app dropdowns do, rather than accepting free text.
-      // Validation only bites once the master is populated, so a brand-new system with no
-      // departments/locations yet is not blocked from its first import.
-      const [deptMaster, locMaster] = await Promise.all([
-        client.query('SELECT LOWER(name) AS name FROM departments WHERE is_active'),
-        client.query('SELECT LOWER(name) AS name FROM locations WHERE is_active')
+      // Load master data once. A value in the sheet is validated against the active master
+      // (the single source of truth) — the importer honours the masters exactly like the
+      // in-app dropdowns. Validation only bites once a master is populated, so a brand-new
+      // system with no departments/locations yet is not blocked from its first import.
+      const [subtypesGrouped, deptMaster, locMaster] = await Promise.all([
+        cq('assets:subtypesGrouped', {}),
+        cq('masters:list', { table: 'departments' }),
+        cq('masters:list', { table: 'locations' })
       ]);
-      const validDepartments = new Set(deptMaster.rows.map((r) => r.name));
-      const validLocations = new Set(locMaster.rows.map((r) => r.name));
+      const validSubtypes = {};
+      for (const [category, names] of Object.entries(subtypesGrouped)) {
+        validSubtypes[category] = new Set(names.map((n) => String(n).toLowerCase()));
+      }
+      const validDepartments = new Set(deptMaster.map((d) => String(d.name).toLowerCase()));
+      const validLocations = new Set(locMaster.map((l) => String(l.name).toLowerCase()));
 
+      const batchAssetIds = new Set();
+      const prepared = [];
       for (let i = 0; i < assets.length; i++) {
         const rowNum = i + 1;
         const asset = assets[i];
@@ -404,15 +321,13 @@ function register(app) {
           errors.push('Category must be "IT" or "Office"');
         }
 
-        // Item Type is optional, but when supplied it must be a configured subtype for
-        // the chosen category — this is what makes the mapping data-driven.
+        // Item Type is optional, but when supplied it must be a configured subtype for the
+        // chosen category — this is what makes the mapping data-driven.
         const subtype = (type || '').trim();
         if (subtype && validSubtypes[category] && !validSubtypes[category].has(subtype.toLowerCase())) {
           errors.push(`"${subtype}" is not a valid Asset Tag Subtype for category "${category}"`);
         }
 
-        // Department & Location must come from their masters when supplied (and once the
-        // master exists), mirroring the in-app dropdowns.
         const deptValue = (department || '').trim();
         if (deptValue && validDepartments.size && !validDepartments.has(deptValue.toLowerCase())) {
           errors.push(`Department "${deptValue}" is not in the Department master. Add it under Users → Departments & Locations first.`);
@@ -444,80 +359,61 @@ function register(app) {
           summary.errors.push({ row: rowNum, assetId, error: `Duplicate Asset ID "${assetId}" in batch` });
           continue;
         }
-
-        const idExists = await client.query('SELECT 1 FROM assets WHERE id = $1', [assetId]);
-        if (idExists.rows.length > 0) {
-          summary.duplicate++;
-          summary.errors.push({ row: rowNum, assetId, error: `Asset ID "${assetId}" already exists in database` });
-          continue;
-        }
+        batchAssetIds.add(assetId);
 
         const qty = parseInt(quantity) || 1;
         const cost = parseFloat(purchaseCost) || 0;
 
-        const insertQuery = `
-          INSERT INTO assets (
-            id, name, category, type, brand, model, serial_number, total_quantity, available_quantity,
-            assigned_quantity, unit, purchase_date, cost, supplier, warranty_expiry, location, status,
-            department, associate_department, depreciation_life_years
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
-        `;
-        const values = [
-          assetId,
+        prepared.push({
+          _ref: rowNum,
+          id: assetId,
           name,
           category,
-          subtype,
-          brand || '',
-          model || '',
-          serialNumber || null,
-          qty,
-          qty,
-          0,
-          unit || 'pcs',
-          purchaseDate || null,
+          type: subtype,
+          brand: brand || '',
+          model: model || '',
+          serial_number: serialNumber || null,
+          total_quantity: qty,
+          available_quantity: qty,
+          assigned_quantity: 0,
+          unit: unit || 'pcs',
+          purchase_date: purchaseDate || null,
           cost,
-          supplier || '',
-          warrantyExpiry || null,
-          location || '',
-          status || 'Available',
-          department || '',
-          associateDepartment || null,
-          lifespan
-        ];
+          supplier: supplier || '',
+          warranty_expiry: warrantyExpiry || null,
+          location: location || '',
+          status: status || 'Available',
+          department: department || '',
+          associate_department: associateDepartment || null,
+          depreciation_life_years: lifespan
+        });
+      }
 
-        await client.query(insertQuery, values);
-        summary.success++;
-        batchAssetIds.add(assetId);
+      const refToAssetId = new Map(prepared.map((p) => [p._ref, p.id]));
+      if (prepared.length) {
+        const results = await cm('imports:insertAssets', { docs: prepared });
+        for (const r of results) {
+          if (r.status === 'success') summary.success++;
+          else { summary.duplicate++; summary.errors.push({ row: r.ref, assetId: refToAssetId.get(r.ref), error: r.error }); }
+        }
       }
 
       const actor = req.headers['x-user-email'] || 'Admin';
-      await client.query(
-        `INSERT INTO system_logs (actor, action, detail)
-         VALUES ($1, $2, $3)`,
-        [
-          actor,
-          'Asset Bulk Import',
-          `Imported assets. Total: ${summary.total}, Success: ${summary.success}, Failed: ${summary.failed}, Duplicate: ${summary.duplicate}`
-        ]
-      );
-
-      notifications.notify('system.bulk_import_completed', `import:assets:${Date.now()}`, {
-        kind: 'asset',
-        total: summary.total,
-        success: summary.success,
-        failed: summary.failed,
-        duplicate: summary.duplicate,
-        actor
+      await cm('logs:add', {
+        actor,
+        action: 'Asset Bulk Import',
+        detail: `Imported assets. Total: ${summary.total}, Success: ${summary.success}, Failed: ${summary.failed}, Duplicate: ${summary.duplicate}`
       });
 
-      await client.query('COMMIT');
+      notifications.notify('system.bulk_import_completed', `import:assets:${Date.now()}`, {
+        kind: 'asset', total: summary.total, success: summary.success,
+        failed: summary.failed, duplicate: summary.duplicate, actor
+      });
+
       res.json(summary);
     } catch (err) {
-      await client.query('ROLLBACK');
-      console.error('Asset import transaction failed:', err);
+      console.error('Asset import failed:', err);
       res.status(500).json({ error: 'Import failed unexpectedly: ' + err.message });
-    } finally {
-      client.release();
     }
   });
 }
