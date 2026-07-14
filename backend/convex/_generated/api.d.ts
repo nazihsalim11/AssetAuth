@@ -9,7 +9,9 @@
  */
 
 import type * as generic from "../generic.js";
+import type * as masters from "../masters.js";
 import type * as storage from "../storage.js";
+import type * as users from "../users.js";
 
 import type {
   ApiFromModules,
@@ -19,7 +21,9 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   generic: typeof generic;
+  masters: typeof masters;
   storage: typeof storage;
+  users: typeof users;
 }>;
 
 /**
