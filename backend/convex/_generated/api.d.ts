@@ -14,6 +14,7 @@ import type * as assignments from "../assignments.js";
 import type * as documents from "../documents.js";
 import type * as generic from "../generic.js";
 import type * as invoices from "../invoices.js";
+import type * as knowledgeBase from "../knowledgeBase.js";
 import type * as logs from "../logs.js";
 import type * as masters from "../masters.js";
 import type * as movements from "../movements.js";
@@ -34,6 +35,7 @@ declare const fullApi: ApiFromModules<{
   documents: typeof documents;
   generic: typeof generic;
   invoices: typeof invoices;
+  knowledgeBase: typeof knowledgeBase;
   logs: typeof logs;
   masters: typeof masters;
   movements: typeof movements;
