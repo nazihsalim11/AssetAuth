@@ -25,17 +25,58 @@ verify with `convex run` → commit.
 
 ## ⬜ Remaining modules (still on PGlite)
 
-- [ ] **tickets** — `src/routes/tickets.js` (~1012 lines, ~91 query sites). Biggest; has
-      SLA hooks. Convert alongside / before the SLA files.
-- [ ] **purchaseOrders** — `purchaseOrders.js` (~907, ~54). **Owns vendors CRUD** — once
-      converted, the vendor registry write-path is fully on Convex (read-path already is
-      via `src/utils/vendor.js`).
-- [ ] **SLA** — `slaRoutes.js` (~493), `slaModel.js` (~101), `slaAssignment.js` (~71).
-      Includes SLA policy escalation + the scheduler; coordinate with tickets.
-- [ ] **imports** — `src/routes/imports.js` (~525). Bulk asset import + import_jobs.
-- [ ] **reports** — `reports.js` (~517, only ~4 query sites — mostly JS already).
-      Aggregation-heavy: reimplement group-by/rollups in JS over Convex queries.
-- [ ] **dashboards** — `dashboards.js` (~300, ~14). Aggregation-heavy (read-only).
+- [x] **tickets** — `src/routes/tickets.js` (~1012). Converted with `slaModel` + `slaAssignment`
+      (both now read Convex via generic:list; `slaEngine` is pure, untouched). `convex/tickets.js`
+      holds queue/detail/analytics queries + create (SLA deadlines computed in Node, atomic
+      insert + ticket_id gen + timeline + attachments + optional auto-assign), comments (first-
+      response clock), assign (reassignment-aware), status/priority/category/department, and all
+      bulk ops (with cascade delete). Fixes: added the missing `knowledgeBase` require (latent
+      ReferenceError on create); auto-assign now keys on `workos_user_id` (was numeric users.id,
+      inconsistent with manual assign + dashboards); route ISO-serialises SLA `Date`s (Convex
+      client rejects Date). Verified end-to-end (24 assertions): SLA-match, auto-assign,
+      lifecycle, comments/first-response, bulk, analytics, cascade.
+      **HYBRID SEAM (deferred to notifications task):** the SLA breach/escalation sweep in
+      `notifications/scheduler.js` still reads/writes tickets via PGlite → runs on stale
+      boot-time data until notifications is migrated. `notifications.notify()` dispatch also
+      still hybrid (as with every converted module).
+- [x] **purchaseOrders** — `purchaseOrders.js` (~907). **Vendor registry write-path now on
+      Convex** (read-path already was via `src/utils/vendor.js`). `convex/purchaseOrders.js`
+      covers vendor CRUD (case-insensitive unique name; delete nulls `vendor_id` across
+      purchase_orders/invoices/amcs/assets per ON DELETE SET NULL), PO settings + versioned
+      terms, and PO CRUD with atomic sequential number allocation (old FOR UPDATE →
+      serializable mutation), multi-table item/attachment writes, and versioned documents.
+      Totals (`poFormat`), vendor snapshot, storage links + email stay in Node. Logs via
+      `logs:add`, inbox mirror via `generic:insert`. Verified end-to-end (23 assertions):
+      vendor uniqueness + FK-null, number allocation/sequence, terms/doc versioning, PO
+      create/list/update/delete cascade.
+- [~] **SLA** — `slaModel.js` (~101) ✅ + `slaAssignment.js` (~71) ✅ done with tickets (read
+      Convex now). Remaining: `slaRoutes.js` (~493) — calendar/policy/escalation-ladder CRUD +
+      preview (still on PGlite; straightforward CRUD conversion). The escalation *scheduler*
+      lives in `notifications/scheduler.js` → convert with the notifications engine.
+- [x] **imports** — `src/routes/imports.js` (~525). Bulk employee + asset import + import_jobs.
+      `convex/imports.js` adds `jobCreate` (ON CONFLICT import_key DO NOTHING), `insertUsers`
+      and `insertAssets` (atomic batch inserts with in-mutation dup guards). The old
+      chunk/SAVEPOINT retry dance collapses to one atomic mutation per chunk; validation +
+      WorkOS user creation + master-data checks stay in Node. Reads via `users:list` /
+      `masters:list` / `assets:subtypesGrouped`; job progress/finish via `generic:update`;
+      logs via `logs:add`. Fixed the dead `import_jobs.by_import_key` index (camelCase →
+      `import_key`). Added a serial-dup guard to asset import (native `assets:create`
+      enforces it; the old importer only relied on the DB UNIQUE constraint, which aborted
+      the whole batch). `notifications.notify()` left on the hybrid engine (its own task).
+      Verified: jobCreate idempotency, user/asset batch dedup, serial guard, job get/update.
+- [x] **reports** — `reports.js` (~517). All 14 report builders + `filterOptions` now fetch
+      whole tables via `cq('generic:list')` and fold in JS (WHERE/JOIN/GROUP BY/COUNT-FILTER
+      ported). Scheduled-reports writes: `convex/reports.js` adds `scheduledCreate` (SERIAL
+      id-gen) + `emailInsert` (insert-if-absent inbox mirror); edit/delete/mark-run reuse
+      `generic:update`/`generic:remove` (note: id coerced to Number — Convex stores int ids).
+      Verified: all builders run + aggregation math checked against seeded rows + full
+      scheduled CRUD roundtrip.
+- [x] **dashboards** — `dashboards.js` (~300, ~14). Aggregation-heavy (read-only).
+      Reimplemented in `convex/dashboards.js` (4 queries: tickets/sla/technicians/assets);
+      the SQL COUNT-FILTER / GROUP BY / EXTRACT folds are now JS over `collect()`. Route
+      resolves the department scope and calls `cq('dashboards:*')`. Also added the four
+      `ticket*` tables to the `TABLES` mirror list in `db.js` so ticket data actually
+      flows to Convex (they were absent, so the ticket dashboards read empty).
 - [ ] **notifications** — `src/routes/notifications.js` (~402) **and** the notify engine
       `backend/notifications.js`. Central: already-converted modules (invoices,
       permissions) call `notifications.notify()`, which still writes PGlite during the
@@ -64,9 +105,10 @@ verify with `convex run` → commit.
 
 - [ ] Boot backend with only `CONVEX_URL` set (no `DATABASE_URL`) — confirm healthy.
 - [ ] Smoke-test each domain end-to-end through the running API (not just `convex run`).
-- [ ] Re-add the missing Convex schema tables discovered mid-migration
-      (`tickets` is not yet in `convex/schema.js`; the masters dependency check
-      currently skips it).
+- [x] Re-add the missing Convex schema tables discovered mid-migration.
+      `tickets` + `ticket_timeline` / `ticket_comments` / `ticket_attachments`
+      added to `convex/schema.js` (snake_case indexes, deployed via
+      `npx convex dev --once`). Masters dependency check can now include `tickets`.
 - [ ] Deploy to Render and confirm memory stays under 512 MB.
 - [ ] Merge `convex-migration` → `main`.
 
@@ -81,6 +123,7 @@ verify with `convex run` → commit.
 - SERIAL ids are derived as `max(id)+1`; client-supplied VARCHAR ids are checked for dups.
 - Strip `_id` / `_creationTime` from Convex docs before returning to the frontend.
 - `tickets` and `role_permissions` were missing from `convex/schema.js`
-  (`role_permissions` added in commit `3bd373e`; `tickets` still to add).
+  (`role_permissions` added in commit `3bd373e`; `tickets` + its child tables
+  added — schema now complete).
 - Local `.env` has `DATABASE_URL` commented out (`# [convex-migration: disabled]`) — keep
   it disabled so `db.js` stays in PGlite/Convex mode, not Postgres mode.

@@ -1,59 +1,57 @@
 /**
  * Database bridge for the SLA engine. slaEngine.js is pure; this module loads policies,
- * calendars and holidays from Postgres and feeds them in, and exposes the couple of
+ * calendars and holidays from Convex and feeds them in, and exposes the couple of
  * operations the server needs: pick a ticket's policy + deadlines, and resolve which
  * business calendar applies.
+ *
+ * Reads go through Convex (generic:list / generic:get) over the mirrored snake_case tables,
+ * so the SLA engine no longer depends on PGlite.
  */
 
-const db = require('./db');
+const { cq } = require('./convexApi');
 const engine = require('./slaEngine');
+
+// holiday_date is mirrored as an ISO timestamp or a YYYY-MM-DD string; normalise to YMD.
+const toYMD = (d) => (d == null ? null : new Date(d).toISOString().slice(0, 10));
 
 /* ------------------------------------------------------------------ calendars */
 
 /** A calendar row plus its holiday date strings, shaped for the engine. */
-async function getCalendarWithHolidays(calendarId, client = db) {
-  if (!calendarId) return await getDefaultCalendar(client);
-  const { rows } = await client.query('SELECT * FROM business_calendars WHERE id = $1', [calendarId]);
-  if (!rows.length) return await getDefaultCalendar(client);
-  return attachHolidays(rows[0], client);
+async function getCalendarWithHolidays(calendarId) {
+  if (!calendarId) return await getDefaultCalendar();
+  const cal = await cq('generic:get', { table: 'business_calendars', idField: 'id', idVal: calendarId });
+  if (!cal) return await getDefaultCalendar();
+  return attachHolidays(cal);
 }
 
-async function getDefaultCalendar(client = db) {
-  const { rows } = await client.query(
-    `SELECT * FROM business_calendars
-     WHERE active = TRUE
-     ORDER BY is_default DESC, id ASC
-     LIMIT 1`
-  );
+async function getDefaultCalendar() {
+  const cals = (await cq('generic:list', { table: 'business_calendars' }))
+    .filter((c) => c.active === true)
+    .sort((a, b) => (b.is_default ? 1 : 0) - (a.is_default ? 1 : 0) || Number(a.id) - Number(b.id));
   // No calendar configured at all: the engine's normalizeCalendar defaults (Mon–Fri,
   // 09:00–18:00, +05:30) still produce sane deadlines.
-  if (!rows.length) return { is_24x7: false, working_days: [1, 2, 3, 4, 5], holidays: [] };
-  return attachHolidays(rows[0], client);
+  if (!cals.length) return { is_24x7: false, working_days: [1, 2, 3, 4, 5], holidays: [] };
+  return attachHolidays(cals[0]);
 }
 
-async function attachHolidays(calendar, client = db) {
-  const { rows } = await client.query(
-    `SELECT to_char(holiday_date, 'YYYY-MM-DD') AS d FROM calendar_holidays WHERE calendar_id = $1`,
-    [calendar.id]
-  );
-  return { ...calendar, holidays: rows.map((r) => r.d) };
+async function attachHolidays(calendar) {
+  const holidays = (await cq('generic:list', { table: 'calendar_holidays' }))
+    .filter((h) => h.calendar_id === calendar.id)
+    .map((h) => toYMD(h.holiday_date))
+    .filter(Boolean);
+  return { ...calendar, holidays };
 }
 
 /* ------------------------------------------------------------------ policies */
 
-async function loadActivePolicies(client = db) {
-  const { rows } = await client.query(
-    `SELECT * FROM sla_policies WHERE active = TRUE AND archived = FALSE`
-  );
-  return rows;
+async function loadActivePolicies() {
+  return (await cq('generic:list', { table: 'sla_policies' })).filter((p) => p.active === true && p.archived === false);
 }
 
-async function loadEscalationLevels(policyId, client = db) {
-  const { rows } = await client.query(
-    `SELECT * FROM sla_escalation_levels WHERE policy_id = $1 ORDER BY level ASC`,
-    [policyId]
-  );
-  return rows;
+async function loadEscalationLevels(policyId) {
+  return (await cq('generic:list', { table: 'sla_escalation_levels' }))
+    .filter((l) => l.policy_id === policyId)
+    .sort((a, b) => Number(a.level) - Number(b.level));
 }
 
 /* ------------------------------------------------ deadline computation */
@@ -66,8 +64,8 @@ async function loadEscalationLevels(policyId, client = db) {
  * @param ticket   { priority, category, department, assetType, branch }
  * @param createdAt Date the clock starts from (defaults to now)
  */
-async function computeDeadlines(ticket, createdAt = new Date(), client = db) {
-  const policies = await loadActivePolicies(client);
+async function computeDeadlines(ticket, createdAt = new Date()) {
+  const policies = await loadActivePolicies();
   const policy = engine.matchPolicy(policies, ticket);
 
   if (!policy) {
@@ -77,18 +75,11 @@ async function computeDeadlines(ticket, createdAt = new Date(), client = db) {
     return { policy: null, policyId: null, calendarId: null, firstResponseDue: null, resolutionDue };
   }
 
-  const calendar = await getCalendarWithHolidays(policy.calendar_id, client);
+  const calendar = await getCalendarWithHolidays(policy.calendar_id);
   const firstResponseDue = engine.addBusinessMinutes(createdAt, policy.first_response_minutes, calendar);
   const resolutionDue = engine.addBusinessMinutes(createdAt, policy.resolution_minutes, calendar);
 
-  return {
-    policy,
-    policyId: policy.id,
-    calendarId: policy.calendar_id,
-    firstResponseDue,
-    resolutionDue,
-    calendar
-  };
+  return { policy, policyId: policy.id, calendarId: policy.calendar_id, firstResponseDue, resolutionDue, calendar };
 }
 
 module.exports = {

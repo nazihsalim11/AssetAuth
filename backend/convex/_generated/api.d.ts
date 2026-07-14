@@ -12,15 +12,20 @@ import type * as amc from "../amc.js";
 import type * as assets from "../assets.js";
 import type * as assignments from "../assignments.js";
 import type * as cleanupOrphans from "../cleanupOrphans.js";
+import type * as dashboards from "../dashboards.js";
 import type * as documents from "../documents.js";
 import type * as generic from "../generic.js";
+import type * as imports from "../imports.js";
 import type * as invoices from "../invoices.js";
 import type * as knowledgeBase from "../knowledgeBase.js";
 import type * as logs from "../logs.js";
 import type * as masters from "../masters.js";
 import type * as movements from "../movements.js";
 import type * as permissions from "../permissions.js";
+import type * as purchaseOrders from "../purchaseOrders.js";
+import type * as reports from "../reports.js";
 import type * as storage from "../storage.js";
+import type * as tickets from "../tickets.js";
 import type * as users from "../users.js";
 
 import type {
@@ -34,15 +39,20 @@ declare const fullApi: ApiFromModules<{
   assets: typeof assets;
   assignments: typeof assignments;
   cleanupOrphans: typeof cleanupOrphans;
+  dashboards: typeof dashboards;
   documents: typeof documents;
   generic: typeof generic;
+  imports: typeof imports;
   invoices: typeof invoices;
   knowledgeBase: typeof knowledgeBase;
   logs: typeof logs;
   masters: typeof masters;
   movements: typeof movements;
   permissions: typeof permissions;
+  purchaseOrders: typeof purchaseOrders;
+  reports: typeof reports;
   storage: typeof storage;
+  tickets: typeof tickets;
   users: typeof users;
 }>;
 

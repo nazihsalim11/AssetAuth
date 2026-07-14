@@ -7,36 +7,33 @@
  *                   spreads new work evenly without needing a stored pointer.
  *
  * "Eligible" means an active, non-Employee user, preferring those in the ticket's
- * department and falling back to the whole pool if the department has no agent — the
- * same rule the assignee picker uses in the UI.
+ * department and falling back to the whole pool if the department has no agent.
+ *
+ * Reads users + tickets from Convex. Agents are keyed by workos_user_id — the same handle
+ * manual assignment and the dashboards use — so an auto-assigned ticket's assigned_to is
+ * consistent with everything else (the old code keyed on the numeric users.id).
  */
 
-const db = require('./db');
+const { cq } = require('./convexApi');
 
 const ACTIVE_TICKET_STATUSES = ['Open', 'In Progress', 'Pending', 'On Hold', 'Reopened'];
 
-async function eligibleAgents(department, client = db) {
-  const { rows } = await client.query(
-    `SELECT id, name, department, role::text AS role
-     FROM users
-     WHERE status = 'Active' AND role::text <> 'Employee'`
-  );
-  const inDept = rows.filter((a) => a.department === department);
-  return inDept.length ? inDept : rows;
+async function eligibleAgents(department) {
+  const users = await cq('users:list', {});
+  const agents = users
+    .filter((u) => u.status === 'Active' && String(u.role) !== 'Employee')
+    .map((u) => ({ id: u.workos_user_id, name: u.name, department: u.department, role: u.role }));
+  const inDept = agents.filter((a) => a.department === department);
+  return inDept.length ? inDept : agents;
 }
 
-async function workloadOf(agentIds, client = db) {
+function workloadOf(agentIds, tickets) {
+  const set = new Set(agentIds);
   const map = {};
   for (const id of agentIds) map[id] = 0;
-  if (!agentIds.length) return map;
-  const { rows } = await client.query(
-    `SELECT assigned_to, COUNT(*)::int AS c
-     FROM tickets
-     WHERE assigned_to = ANY($1::int[]) AND status = ANY($2::text[])
-     GROUP BY assigned_to`,
-    [agentIds, ACTIVE_TICKET_STATUSES]
-  );
-  for (const r of rows) map[r.assigned_to] = r.c;
+  for (const t of tickets) {
+    if (set.has(t.assigned_to) && ACTIVE_TICKET_STATUSES.includes(t.status)) map[t.assigned_to]++;
+  }
   return map;
 }
 
@@ -44,24 +41,25 @@ async function workloadOf(agentIds, client = db) {
  * Choose an agent for a ticket, or null if none are eligible. Returns the agent row
  * augmented with `workload` (open-ticket count) for logging.
  */
-async function pickAgent(ticket, strategy = 'least_loaded', client = db) {
-  const agents = await eligibleAgents(ticket.department, client);
+async function pickAgent(ticket, strategy = 'least_loaded') {
+  const agents = await eligibleAgents(ticket.department);
   if (!agents.length) return null;
   const ids = agents.map((a) => a.id);
-  const load = await workloadOf(ids, client);
+  const tickets = await cq('generic:list', { table: 'tickets' });
+  const load = workloadOf(ids, tickets);
 
   if (strategy === 'round_robin') {
-    const { rows } = await client.query(
-      `SELECT assigned_to, MAX(created_at) AS last
-       FROM tickets WHERE assigned_to = ANY($1::int[]) GROUP BY assigned_to`,
-      [ids]
-    );
     const lastAssigned = {};
-    for (const r of rows) lastAssigned[r.assigned_to] = new Date(r.last).getTime();
+    for (const t of tickets) {
+      if (ids.includes(t.assigned_to) && t.created_at) {
+        const ts = new Date(t.created_at).getTime();
+        if (!(t.assigned_to in lastAssigned) || ts > lastAssigned[t.assigned_to]) lastAssigned[t.assigned_to] = ts;
+      }
+    }
     // Never-assigned agents (undefined -> 0) sort first, then oldest assignment.
-    agents.sort((a, b) => (lastAssigned[a.id] || 0) - (lastAssigned[b.id] || 0) || a.id - b.id);
+    agents.sort((a, b) => (lastAssigned[a.id] || 0) - (lastAssigned[b.id] || 0) || String(a.id).localeCompare(String(b.id)));
   } else {
-    agents.sort((a, b) => load[a.id] - load[b.id] || a.id - b.id);
+    agents.sort((a, b) => load[a.id] - load[b.id] || String(a.id).localeCompare(String(b.id)));
   }
 
   const chosen = agents[0];
