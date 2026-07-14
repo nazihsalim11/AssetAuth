@@ -1,47 +1,53 @@
-const db = require('../../db');
+const { cq, cm } = require('../../convexApi');
 const { resolveVendor } = require('../utils/vendor');
 
-// Assets API — extracted verbatim from server.js. Employees are custodians, not
-// managers: they see only the assets currently assigned to them and may not create,
-// modify or delete any asset. Every mutation is gated by the module->verb matrix.
-function register(app, { requireUser, requirePermission, isEmployee, EMPLOYEE_ASSET_IDS }) {
-  // Employees see only the assets currently assigned to them. Scoping keys on
-  // asset_assignments.user_id, not assets.assigned_employee: that column stores a
-  // display summary like "Alice Johnson (1)", so matching it against a name never
-  // worked. Auth is optional so the unauthenticated connection probe still succeeds.
-  // Authentication is required. Making auth optional here meant an employee could see
-  // every asset simply by omitting the Authorization header.
+// Surface a ConvexError's message (carried on err.data) or unwrap Convex's
+// "Uncaught Error:" prefix so the client sees the real reason.
+function cleanErr(err) {
+  if (err && err.data) return typeof err.data === 'string' ? err.data : (err.data.message || 'Operation failed.');
+  const msg = (err && err.message) || 'Operation failed.';
+  const m = msg.match(/Uncaught (?:Convex)?Error:\s*(.+?)(?:\n|\s+at\s|$)/);
+  return m ? m[1].trim() : msg;
+}
+
+// Convex docs carry system fields the SQL rows never had; strip them so the response
+// matches the previous snake_case row shape the frontend camelCases.
+const stripSys = (d) => {
+  if (!d) return d;
+  const { _id, _creationTime, ...rest } = d;
+  return rest;
+};
+
+// Assets API. Employees are custodians, not managers: they see only the assets currently
+// assigned to them and may not create, modify or delete any asset. Every mutation is
+// gated by the module->verb matrix. Backed by native Convex (backend/convex/assets.js).
+function register(app, { requireUser, requirePermission, isEmployee }) {
+  // Employees see only the assets currently assigned to them, scoped on
+  // asset_assignments.user_id (the FK truth), not the assigned_employee display summary.
   app.get('/api/assets', async (req, res) => {
     const user = requireUser(req, res);
     if (!user) return;
     try {
-      const result = isEmployee(user)
-        ? await db.query(
-            `SELECT * FROM assets WHERE id IN (${EMPLOYEE_ASSET_IDS}) ORDER BY created_at DESC`,
-            [user.id]
-          )
-        : await db.query('SELECT * FROM assets ORDER BY created_at DESC');
-      res.json(result.rows);
+      const rows = isEmployee(user)
+        ? await cq('assets:listForEmployee', { userId: user.id })
+        : await cq('assets:listAll', {});
+      res.json(rows.map(stripSys));
     } catch (err) {
       console.error('GET /api/assets failed:', err);
-      res.status(500).json({ error: 'Database query failed: ' + err.message });
+      res.status(500).json({ error: 'Database query failed: ' + cleanErr(err) });
     }
   });
 
   // Master data: valid Item Types (Asset Tag Subtypes) grouped by Asset Category.
-  // Drives the category-dependent dropdowns in the UI and validates bulk imports,
-  // replacing the old hard-coded IT->Laptop / Office->Chair mapping.
   app.get('/api/asset-subtypes', async (req, res) => {
     const user = requireUser(req, res);
     if (!user) return;
     try {
-      const { rows } = await db.query('SELECT category, name FROM asset_subtypes ORDER BY category, name');
-      const grouped = {};
-      for (const r of rows) (grouped[r.category] = grouped[r.category] || []).push(r.name);
+      const grouped = await cq('assets:subtypesGrouped', {});
       res.json(grouped);
     } catch (err) {
       console.error('GET /api/asset-subtypes failed:', err);
-      res.status(500).json({ error: 'Could not load asset subtypes: ' + err.message });
+      res.status(500).json({ error: 'Could not load asset subtypes: ' + cleanErr(err) });
     }
   });
 
@@ -65,30 +71,37 @@ function register(app, { requireUser, requirePermission, isEmployee, EMPLOYEE_AS
       return res.status(err.statusCode || 400).json({ error: err.message });
     }
 
-    const query = `
-      INSERT INTO assets (
-        id, name, serial_number, category, type, status, cost, purchase_date,
-        warranty_expiry, department, associate_department, location, amc_id, invoice_id,
-        assigned_employee, depreciation_life_years, notes, reorder_level, supplier, vendor_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
-      RETURNING *;
-    `;
-    // Useful Lifespan is optional: an omitted/blank value is stored as NULL rather
-    // than being forced to a default, so "no value" is preserved faithfully.
-    // reorder_level drives Low Inventory alerts; 0 (the default) means "not tracked".
-    const values = [
-      id, name, serialNumber, category, type, status || 'Available', cost || 0, purchaseDate || null,
-      warrantyExpiry || null, department || '', associateDepartment || null, location || '', amcId || null, invoiceId || null,
-      assignedEmployee || '', depreciationLifeYears ? parseInt(depreciationLifeYears) : null, notes || '',
-      reorderLevel ? parseInt(reorderLevel) : 0, vendorName || '', vendorId
-    ];
+    // Useful Lifespan is optional: an omitted/blank value is stored as NULL rather than
+    // forced to a default. reorder_level drives Low Inventory alerts; 0 means "not tracked".
+    const doc = {
+      id,
+      name,
+      serial_number: serialNumber,
+      category,
+      type,
+      status: status || 'Available',
+      cost: cost || 0,
+      purchase_date: purchaseDate || null,
+      warranty_expiry: warrantyExpiry || null,
+      department: department || '',
+      associate_department: associateDepartment || null,
+      location: location || '',
+      amc_id: amcId || null,
+      invoice_id: invoiceId || null,
+      assigned_employee: assignedEmployee || '',
+      depreciation_life_years: depreciationLifeYears ? parseInt(depreciationLifeYears) : null,
+      notes: notes || '',
+      reorder_level: reorderLevel ? parseInt(reorderLevel) : 0,
+      supplier: vendorName || '',
+      vendor_id: vendorId ?? null,
+    };
 
     try {
-      const result = await db.query(query, values);
-      res.status(201).json(result.rows[0]);
+      const created = await cm('assets:create', { doc });
+      res.status(201).json(stripSys(created));
     } catch (err) {
       console.error(err);
-      res.status(500).json({ error: 'Database insertion failed: ' + (err.detail || err.message) });
+      res.status(500).json({ error: 'Database insertion failed: ' + cleanErr(err) });
     }
   });
 
@@ -99,26 +112,8 @@ function register(app, { requireUser, requirePermission, isEmployee, EMPLOYEE_AS
     const { id } = req.params;
     const fields = req.body;
 
-    // Relocating to a custodian must name a real, active employee. Without this an
-    // asset could be handed to a person who does not exist, which is how the orphaned
-    // custodian records arose in the first place.
-    if (fields.assignedEmployee) {
-      try {
-        const { rows } = await db.query(
-          `SELECT workos_user_id AS id FROM users
-           WHERE status = 'Active' AND (LOWER(TRIM(name)) = LOWER(TRIM($1)) OR LOWER(email) = LOWER($1))`,
-          [String(fields.assignedEmployee)]
-        );
-        if (rows.length === 0) {
-          return res.status(400).json({ error: `Employee "${fields.assignedEmployee}" does not exist in the user directory.` });
-        }
-      } catch (err) {
-        console.error('Custodian validation failed:', err);
-        return res.status(500).json({ error: 'Could not validate the selected employee: ' + err.message });
-      }
-    }
-
-    // Dynamically build the UPDATE query based on fields passed
+    // camelCase field -> snake_case column. Custodian existence is validated inside the
+    // Convex mutation (must be a real active employee) — the same guard as before.
     const allowedFields = {
       name: 'name',
       serialNumber: 'serial_number',
@@ -141,20 +136,11 @@ function register(app, { requireUser, requirePermission, isEmployee, EMPLOYEE_AS
       reorderLevel: 'reorder_level'
     };
 
-    const setClauses = [];
-    const values = [];
-    let idx = 1;
-
+    const patch = {};
     for (const [key, dbCol] of Object.entries(allowedFields)) {
       if (fields[key] !== undefined) {
-        setClauses.push(`${dbCol} = $${idx}`);
-        // Handle potential empty strings for foreign keys
-        if ((key === 'amcId' || key === 'invoiceId') && fields[key] === '') {
-          values.push(null);
-        } else {
-          values.push(fields[key]);
-        }
-        idx++;
+        // Empty string for a foreign key means "clear it".
+        patch[dbCol] = (key === 'amcId' || key === 'invoiceId') && fields[key] === '' ? null : fields[key];
       }
     }
 
@@ -167,25 +153,26 @@ function register(app, { requireUser, requirePermission, isEmployee, EMPLOYEE_AS
       } catch (err) {
         return res.status(err.statusCode || 400).json({ error: err.message });
       }
-      setClauses.push(`supplier = $${idx}`); values.push(resolved.vendorName || ''); idx++;
-      setClauses.push(`vendor_id = $${idx}`); values.push(resolved.vendorId); idx++;
+      patch.supplier = resolved.vendorName || '';
+      patch.vendor_id = resolved.vendorId ?? null;
     }
 
-    if (setClauses.length === 0) {
+    if (Object.keys(patch).length === 0) {
       return res.status(400).json({ error: 'No fields to update' });
     }
 
-    setClauses.push(`updated_at = NOW()`);
-    values.push(id);
-    const query = `UPDATE assets SET ${setClauses.join(', ')} WHERE id = $${idx} RETURNING *`;
-
     try {
-      const result = await db.query(query, values);
-      if (result.rows.length === 0) return res.status(404).json({ error: 'Asset not found' });
-      res.json(result.rows[0]);
+      const updated = await cm('assets:update', { id, patch });
+      if (!updated) return res.status(404).json({ error: 'Asset not found' });
+      res.json(stripSys(updated));
     } catch (err) {
+      const msg = cleanErr(err);
+      // The custodian guard is a client input error, not a server fault.
+      if (/does not exist in the user directory|already in use/i.test(msg)) {
+        return res.status(400).json({ error: msg });
+      }
       console.error(err);
-      res.status(500).json({ error: 'Database update failed: ' + err.message });
+      res.status(500).json({ error: 'Database update failed: ' + msg });
     }
   });
 
@@ -195,15 +182,14 @@ function register(app, { requireUser, requirePermission, isEmployee, EMPLOYEE_AS
 
     const { id } = req.params;
     try {
-      const result = await db.query('DELETE FROM assets WHERE id = $1 RETURNING *', [id]);
-      if (result.rows.length === 0) return res.status(404).json({ error: 'Asset not found' });
-      res.json({ message: 'Asset deleted successfully', asset: result.rows[0] });
+      const asset = await cm('assets:remove', { id });
+      if (!asset) return res.status(404).json({ error: 'Asset not found' });
+      res.json({ message: 'Asset deleted successfully', asset: stripSys(asset) });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'Database deletion failed' });
     }
   });
-
 
   app.post('/api/assets/bulk/delete', async (req, res) => {
     const actingUser = await requirePermission(req, res, 'assets', 'delete');
@@ -214,13 +200,9 @@ function register(app, { requireUser, requirePermission, isEmployee, EMPLOYEE_AS
       return res.status(400).json({ error: 'Payload must contain an assetIds array' });
     }
     try {
-      await db.query('DELETE FROM assets WHERE id = ANY($1)', [assetIds]);
+      await cm('assets:bulkRemove', { ids: assetIds });
       const actor = req.headers['x-user-email'] || 'Admin';
-      await db.query(
-        `INSERT INTO system_logs (actor, action, detail)
-         VALUES ($1, $2, $3)`,
-        [actor, 'Bulk Delete Assets', `Deleted ${assetIds.length} assets`]
-      );
+      await cm('logs:add', { actor, action: 'Bulk Delete Assets', detail: `Deleted ${assetIds.length} assets` });
       res.json({ message: `Successfully deleted ${assetIds.length} assets` });
     } catch (err) {
       console.error(err);
@@ -237,13 +219,9 @@ function register(app, { requireUser, requirePermission, isEmployee, EMPLOYEE_AS
       return res.status(400).json({ error: 'Payload must contain assetIds array and status' });
     }
     try {
-      await db.query('UPDATE assets SET status = $1 WHERE id = ANY($2)', [status, assetIds]);
+      await cm('assets:bulkPatch', { ids: assetIds, patch: { status } });
       const actor = req.headers['x-user-email'] || 'Admin';
-      await db.query(
-        `INSERT INTO system_logs (actor, action, detail)
-         VALUES ($1, $2, $3)`,
-        [actor, 'Bulk Status Update', `Updated ${assetIds.length} assets to status ${status}`]
-      );
+      await cm('logs:add', { actor, action: 'Bulk Status Update', detail: `Updated ${assetIds.length} assets to status ${status}` });
       res.json({ message: `Successfully updated status of ${assetIds.length} assets` });
     } catch (err) {
       console.error(err);
@@ -260,7 +238,7 @@ function register(app, { requireUser, requirePermission, isEmployee, EMPLOYEE_AS
       return res.status(400).json({ error: 'Payload must contain assetIds array and category' });
     }
     try {
-      await db.query('UPDATE assets SET category = $1 WHERE id = ANY($2)', [category, assetIds]);
+      await cm('assets:bulkPatch', { ids: assetIds, patch: { category } });
       res.json({ message: `Successfully updated category of ${assetIds.length} assets` });
     } catch (err) {
       console.error(err);
@@ -277,7 +255,7 @@ function register(app, { requireUser, requirePermission, isEmployee, EMPLOYEE_AS
       return res.status(400).json({ error: 'Payload must contain assetIds array and location' });
     }
     try {
-      await db.query('UPDATE assets SET location = $1 WHERE id = ANY($2)', [location, assetIds]);
+      await cm('assets:bulkPatch', { ids: assetIds, patch: { location } });
       res.json({ message: `Successfully updated location of ${assetIds.length} assets` });
     } catch (err) {
       console.error(err);
@@ -294,7 +272,7 @@ function register(app, { requireUser, requirePermission, isEmployee, EMPLOYEE_AS
       return res.status(400).json({ error: 'Payload must contain assetIds array and department' });
     }
     try {
-      await db.query('UPDATE assets SET department = $1 WHERE id = ANY($2)', [department, assetIds]);
+      await cm('assets:bulkPatch', { ids: assetIds, patch: { department } });
       res.json({ message: `Successfully updated department of ${assetIds.length} assets` });
     } catch (err) {
       console.error(err);

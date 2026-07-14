@@ -8,7 +8,9 @@
  * @module
  */
 
+import type * as assets from "../assets.js";
 import type * as generic from "../generic.js";
+import type * as logs from "../logs.js";
 import type * as masters from "../masters.js";
 import type * as storage from "../storage.js";
 import type * as users from "../users.js";
@@ -20,7 +22,9 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  assets: typeof assets;
   generic: typeof generic;
+  logs: typeof logs;
   masters: typeof masters;
   storage: typeof storage;
   users: typeof users;
