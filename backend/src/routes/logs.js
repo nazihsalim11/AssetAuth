@@ -1,11 +1,17 @@
-const db = require('../../db');
+const { cq, cm } = require('../../convexApi');
 
-// System logs API — extracted verbatim from server.js.
+const stripSys = (d) => {
+  if (!d) return d;
+  const { _id, _creationTime, ...rest } = d;
+  return rest;
+};
+
+// System logs API. Backed by native Convex (backend/convex/logs.js).
 function register(app) {
   app.get('/api/logs', async (req, res) => {
     try {
-      const result = await db.query('SELECT * FROM system_logs ORDER BY created_at DESC');
-      res.json(result.rows);
+      const rows = await cq('logs:list', {});
+      res.json(rows.map(stripSys));
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'Database query failed' });
@@ -13,22 +19,15 @@ function register(app) {
   });
 
   app.post('/api/logs', async (req, res) => {
-    // A client-supplied timestamp is ignored: created_at is set by the database, so
-    // a caller with a wrong clock cannot back-date a log entry.
+    // A client-supplied timestamp is ignored: created_at is set server-side, so a caller
+    // with a wrong clock cannot back-date a log entry.
     const { actor, action, detail } = req.body;
-    const query = `
-      INSERT INTO system_logs (actor, action, detail)
-      VALUES ($1, $2, $3)
-      RETURNING *;
-    `;
-    const values = [actor, action, detail || ''];
-
     try {
-      const result = await db.query(query, values);
-      res.status(201).json(result.rows[0]);
+      const created = await cm('logs:add', { actor, action, detail: detail || '' });
+      res.status(201).json(stripSys(created));
     } catch (err) {
       console.error(err);
-      res.status(500).json({ error: 'Database insertion failed: ' + err.message });
+      res.status(500).json({ error: 'Database insertion failed: ' + (err.message || err) });
     }
   });
 }
