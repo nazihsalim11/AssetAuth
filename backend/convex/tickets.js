@@ -313,6 +313,37 @@ export const bulkAssign = mutation({
   },
 });
 
+/* ---------------------------------------------------- SLA escalation (scheduler) */
+
+// Single-level "escalate to admins on breach" for unpoliced tickets. Guarded on
+// escalated=false so two overlapping sweeps cannot both escalate.
+export const escalateOnBreach = mutation({
+  args: { ticketId: v.any(), detail: v.string() },
+  handler: async (ctx, { ticketId, detail }) => {
+    const t = await resolveTicket(ctx, String(ticketId));
+    if (!t || t.escalated) return { claimed: false };
+    const now = nowIso();
+    await ctx.db.patch(t._id, { escalated: true, escalated_at: now, updated_at: now });
+    await addTimeline(ctx, t.id, "System", "Escalated", detail);
+    return { claimed: true };
+  },
+});
+
+// Multi-level ladder advance for policy-governed tickets. Guarded on the current level so
+// overlapping sweeps cannot double-advance; a timeline entry is written per newly crossed
+// level (the caller computes them from the pre-advance level).
+export const escalateLadder = mutation({
+  args: { ticketId: v.any(), maxLevel: v.number(), entries: v.array(v.any()) },
+  handler: async (ctx, { ticketId, maxLevel, entries }) => {
+    const t = await resolveTicket(ctx, String(ticketId));
+    if (!t || Number(t.escalation_level || 0) >= maxLevel) return { claimed: false };
+    const now = nowIso();
+    await ctx.db.patch(t._id, { escalation_level: maxLevel, escalated: true, escalated_at: t.escalated_at || now, updated_at: now });
+    for (const e of entries) await addTimeline(ctx, t.id, "System", "Escalated", e.detail);
+    return { claimed: true };
+  },
+});
+
 export const bulkDelete = mutation({
   args: { ticketIds: v.array(v.any()) },
   handler: async (ctx, { ticketIds }) => {

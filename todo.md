@@ -80,8 +80,8 @@ verify with `convex run` → commit.
       resolves the department scope and calls `cq('dashboards:*')`. Also added the four
       `ticket*` tables to the `TABLES` mirror list in `db.js` so ticket data actually
       flows to Convex (they were absent, so the ticket dashboards read empty).
-- [~] **notifications** — dispatcher `notifications/index.js` ✅ + route
-      `src/routes/notifications.js` ✅ converted. `convex/notifications.js` owns settings,
+- [x] **notifications** — dispatcher `notifications/index.js` ✅ + route
+      `src/routes/notifications.js` ✅ + scheduler ✅. `convex/notifications.js` owns settings,
       per-event preferences + recipient rules, the delivery ledger with its **dedup claim**
       (emulating the ON CONFLICT unique index in serializable mutations), in-app bell feed,
       email inbox mirror (event_key-deduped), and admin read APIs. `templates.js` /
@@ -91,9 +91,12 @@ verify with `convex run` → commit.
       `notifications.notify()` is now fully Convex, so every module that calls it is off the
       PGlite seam. Verified (14 assertions): recipient resolution, dedup, configured-audience
       override, email mirror dedup, CRUD, retry.
-      Remaining: `notifications/scheduler.js` (~506) — lifecycle reminder digests + the SLA
-      breach/escalation sweep (still on PGlite; also closes the deferred tickets seam).
-      **NOTE:** live SMTP delivery + cron wiring unchanged but untested here — needs a
+      `notifications/scheduler.js` (~506) ✅ — lifecycle reminder digests + SLA
+      breach/escalation sweep now read Convex and write ticket escalation via
+      `tickets:escalateOnBreach` / `escalateLadder`. **This closes the deferred tickets SLA
+      seam** — the escalation sweep no longer runs on stale PGlite tickets. Verified
+      (8 assertions: low-inventory, breach escalation + idempotency, ladder advance + guard).
+      **NOTE:** live SMTP delivery + node-cron wiring unchanged but untested here — needs a
       real-app smoke test.
 - [x] **cleanupOrphans** — `cleanupOrphans.js` (~196, ~9). Scan/repair moved into
       `convex/cleanupOrphans.js` (`audit` query + `fix` mutation); the obsolete
