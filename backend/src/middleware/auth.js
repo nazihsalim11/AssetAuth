@@ -6,7 +6,7 @@
 // is unchanged from when this lived inline in server.js.
 const { cq } = require('../../convexApi');
 
-module.exports = function createAuth({ db, jwt, permissionModel, JWT_SECRET, ALLOW_HEADER_AUTH }) {
+module.exports = function createAuth({ jwt, permissionModel, JWT_SECRET, ALLOW_HEADER_AUTH }) {
   // --- ROLE PERMISSIONS ---
   // The authoritative permission matrix. Was frontend-only; now every client fetches
   // it from here and Super Admins persist edits to the database.

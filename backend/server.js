@@ -106,7 +106,7 @@ const ALLOW_HEADER_AUTH = process.env.ALLOW_HEADER_AUTH === 'true';
 // Authentication + the permission gate live in src/middleware/auth.js. Bound here once
 // and destructured into locals so every route below (inline or in a route module) uses
 // the same JWT wiring and short-lived role caches.
-const auth = createAuth({ db, jwt, permissionModel, JWT_SECRET, ALLOW_HEADER_AUTH });
+const auth = createAuth({ jwt, permissionModel, JWT_SECRET, ALLOW_HEADER_AUTH });
 const {
   loadRolePermissions,
   roleAllows,
