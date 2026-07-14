@@ -54,7 +54,8 @@ const TABLES = [
   'purchase_orders', 'purchase_order_items', 'purchase_order_attachments',
   'po_settings', 'po_terms', 'purchase_order_documents', 'business_calendars',
   'calendar_holidays', 'sla_policies', 'sla_escalation_levels', 'scheduled_reports',
-  'asset_subtypes', 'departments', 'locations', 'vendors', 'import_jobs', 'role_permissions'
+  'asset_subtypes', 'departments', 'locations', 'vendors', 'import_jobs', 'role_permissions',
+  'tickets', 'ticket_timeline', 'ticket_comments', 'ticket_attachments'
 ];
 
 async function initDb() {

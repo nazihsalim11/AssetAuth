@@ -146,8 +146,29 @@ export default defineSchema({
 
   import_jobs: defineTable(v.any())
     .index("by_original_id", ["id"])
-    .index("by_import_key", ["importKey"]),
+    .index("by_import_key", ["import_key"]),
 
   role_permissions: defineTable(v.any())
     .index("by_role", ["role"]),
+
+  // Fields are snake_case, mirrored from PGlite (see notes in todo.md).
+  tickets: defineTable(v.any())
+    .index("by_original_id", ["id"])
+    .index("by_ticket_id", ["ticket_id"])
+    .index("by_status", ["status"])
+    .index("by_department", ["department"])
+    .index("by_assigned_to", ["assigned_to"])
+    .index("by_created_by", ["created_by"]),
+
+  ticket_timeline: defineTable(v.any())
+    .index("by_original_id", ["id"])
+    .index("by_ticket_id", ["ticket_id"]),
+
+  ticket_comments: defineTable(v.any())
+    .index("by_original_id", ["id"])
+    .index("by_ticket_id", ["ticket_id"]),
+
+  ticket_attachments: defineTable(v.any())
+    .index("by_original_id", ["id"])
+    .index("by_ticket_id", ["ticket_id"]),
 });
