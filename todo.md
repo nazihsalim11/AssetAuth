@@ -49,10 +49,13 @@ verify with `convex run` → commit.
       `logs:add`, inbox mirror via `generic:insert`. Verified end-to-end (23 assertions):
       vendor uniqueness + FK-null, number allocation/sequence, terms/doc versioning, PO
       create/list/update/delete cascade.
-- [~] **SLA** — `slaModel.js` (~101) ✅ + `slaAssignment.js` (~71) ✅ done with tickets (read
-      Convex now). Remaining: `slaRoutes.js` (~493) — calendar/policy/escalation-ladder CRUD +
-      preview (still on PGlite; straightforward CRUD conversion). The escalation *scheduler*
-      lives in `notifications/scheduler.js` → convert with the notifications engine.
+- [x] **SLA** — `slaModel.js` ✅ + `slaAssignment.js` ✅ (with tickets) + `slaRoutes.js` ✅.
+      `convex/sla.js` holds calendar CRUD (+ holiday sets, case-insensitive unique name,
+      in-use guard), policy CRUD (+ escalation ladders replaced atomically, calendar-name
+      join, archive/soft-delete, ticket-governed delete guard). Validation/normalisation
+      stays in Node; preview reuses `slaModel.computeDeadlines`. Verified (21 assertions).
+      The escalation *scheduler* still lives in `notifications/scheduler.js` → convert with
+      the notifications engine (the deferred tickets seam).
 - [x] **imports** — `src/routes/imports.js` (~525). Bulk employee + asset import + import_jobs.
       `convex/imports.js` adds `jobCreate` (ON CONFLICT import_key DO NOTHING), `insertUsers`
       and `insertAssets` (atomic batch inserts with in-mutation dup guards). The old

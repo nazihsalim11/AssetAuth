@@ -24,6 +24,7 @@ import type * as movements from "../movements.js";
 import type * as permissions from "../permissions.js";
 import type * as purchaseOrders from "../purchaseOrders.js";
 import type * as reports from "../reports.js";
+import type * as sla from "../sla.js";
 import type * as storage from "../storage.js";
 import type * as tickets from "../tickets.js";
 import type * as users from "../users.js";
@@ -51,6 +52,7 @@ declare const fullApi: ApiFromModules<{
   permissions: typeof permissions;
   purchaseOrders: typeof purchaseOrders;
   reports: typeof reports;
+  sla: typeof sla;
   storage: typeof storage;
   tickets: typeof tickets;
   users: typeof users;
