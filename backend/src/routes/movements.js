@@ -1,24 +1,27 @@
-const db = require('../../db');
+const { cq, cm } = require('../../convexApi');
 
-// Movements API — extracted verbatim from server.js. Movement history names assets
-// and custodians, so it is scoped the same way the directory is: an employee sees
-// only the history of assets they currently hold.
-function register(app, { requireUser, requirePermission, isEmployee, EMPLOYEE_ASSET_IDS }) {
+// Convex system fields aren't part of the SQL row shape the frontend expects.
+const stripSys = (d) => {
+  if (!d) return d;
+  const { _id, _creationTime, ...rest } = d;
+  return rest;
+};
+
+// Movements API. Movement history names assets and custodians, so it is scoped the same
+// way the directory is: an employee sees only the history of assets they currently hold.
+// Backed by native Convex (backend/convex/movements.js).
+function register(app, { requireUser, requirePermission, isEmployee }) {
   app.get('/api/movements', async (req, res) => {
     const user = requireUser(req, res);
     if (!user) return;
     try {
-      const result = isEmployee(user)
-        ? await db.query(
-            `SELECT * FROM movements WHERE asset_id IN (${EMPLOYEE_ASSET_IDS})
-             ORDER BY date DESC, created_at DESC`,
-            [user.id]
-          )
-        : await db.query('SELECT * FROM movements ORDER BY date DESC, created_at DESC');
-      res.json(result.rows);
+      const rows = isEmployee(user)
+        ? await cq('movements:listForEmployee', { userId: user.id })
+        : await cq('movements:listAll', {});
+      res.json(rows.map(stripSys));
     } catch (err) {
       console.error('GET /api/movements failed:', err);
-      res.status(500).json({ error: 'Database query failed: ' + err.message });
+      res.status(500).json({ error: 'Database query failed: ' + (err.message || err) });
     }
   });
 
@@ -27,19 +30,22 @@ function register(app, { requireUser, requirePermission, isEmployee, EMPLOYEE_AS
     if (!actingUser) return;
 
     const { assetId, date, type, from, to, actor, notes } = req.body;
-    const query = `
-      INSERT INTO movements (asset_id, date, type, from_loc, to_loc, actor, notes)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-      RETURNING *;
-    `;
-    const values = [assetId, date || new Date(), type, from || '', to || '', actor, notes || ''];
+    const doc = {
+      asset_id: assetId,
+      date: date || new Date().toISOString().slice(0, 10),
+      type,
+      from_loc: from || '',
+      to_loc: to || '',
+      actor,
+      notes: notes || '',
+    };
 
     try {
-      const result = await db.query(query, values);
-      res.status(201).json(result.rows[0]);
+      const created = await cm('movements:create', { doc });
+      res.status(201).json(stripSys(created));
     } catch (err) {
       console.error(err);
-      res.status(500).json({ error: 'Database insertion failed: ' + err.message });
+      res.status(500).json({ error: 'Database insertion failed: ' + (err.message || err) });
     }
   });
 }

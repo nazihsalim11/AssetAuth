@@ -1,8 +1,15 @@
-const db = require('../../db');
+const { cq, cm } = require('../../convexApi');
 
-// Documents API — extracted verbatim from server.js. Access is enforced server-side
-// against the role_permissions matrix, so a role without viewDocuments cannot read
-// the repository even by calling the API directly.
+// Convex system fields aren't part of the SQL row shape the frontend expects.
+const stripSys = (d) => {
+  if (!d) return d;
+  const { _id, _creationTime, ...rest } = d;
+  return rest;
+};
+
+// Documents API. Access is enforced server-side against the role_permissions matrix, so a
+// role without documents:view cannot read the repository even by calling the API directly.
+// Backed by native Convex (backend/convex/documents.js).
 function register(app, { requireUser, roleAllows }) {
   app.get('/api/documents', async (req, res) => {
     const user = requireUser(req, res);
@@ -11,11 +18,11 @@ function register(app, { requireUser, roleAllows }) {
       if (!(await roleAllows(user.role, 'documents', 'view'))) {
         return res.status(403).json({ error: 'Your role is not permitted to view the Document Repository.' });
       }
-      const result = await db.query('SELECT * FROM documents ORDER BY created_at DESC');
-      res.json(result.rows);
+      const rows = await cq('documents:listAll', {});
+      res.json(rows.map(stripSys));
     } catch (err) {
       console.error('GET /api/documents failed:', err);
-      res.status(500).json({ error: 'Database query failed: ' + err.message });
+      res.status(500).json({ error: 'Database query failed: ' + (err.message || err) });
     }
   });
 
@@ -27,19 +34,20 @@ function register(app, { requireUser, roleAllows }) {
         return res.status(403).json({ error: 'Your role is not permitted to add documents.' });
       }
       const { name, type, size, uploadDate, association, fileUrl } = req.body;
-      // The database issues the id from a sequence; any client-supplied id is ignored.
-      const idRow = await db.query(`SELECT 'DOC-' || LPAD(nextval('documents_doc_seq')::text, 3, '0') AS id`);
-      const id = idRow.rows[0].id;
-
-      const result = await db.query(
-        `INSERT INTO documents (id, name, type, file_size, upload_date, association, file_url)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-        [id, name, type, size || '', uploadDate, association || '', fileUrl || '']
-      );
-      res.status(201).json(result.rows[0]);
+      // Convex issues the id (DOC-### sequence); any client-supplied id is ignored.
+      const doc = {
+        name,
+        type,
+        file_size: size || '',
+        upload_date: uploadDate,
+        association: association || '',
+        file_url: fileUrl || '',
+      };
+      const created = await cm('documents:create', { doc });
+      res.status(201).json(stripSys(created));
     } catch (err) {
       console.error('POST /api/documents failed:', err);
-      res.status(500).json({ error: 'Database insertion failed: ' + err.message });
+      res.status(500).json({ error: 'Database insertion failed: ' + (err.message || err) });
     }
   });
 }
