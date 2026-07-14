@@ -9,6 +9,7 @@
  */
 
 import type * as assets from "../assets.js";
+import type * as assignments from "../assignments.js";
 import type * as documents from "../documents.js";
 import type * as generic from "../generic.js";
 import type * as logs from "../logs.js";
@@ -25,6 +26,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   assets: typeof assets;
+  assignments: typeof assignments;
   documents: typeof documents;
   generic: typeof generic;
   logs: typeof logs;
