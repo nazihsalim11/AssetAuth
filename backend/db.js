@@ -2,6 +2,41 @@ const { PGlite } = require('@electric-sql/pglite');
 const { ConvexHttpClient, ConvexClient } = require('convex/browser');
 require('dotenv').config();
 
+// ---------------------------------------------------------------------------
+// External Postgres mode (memory-lean; recommended for hosted deploys)
+// ---------------------------------------------------------------------------
+// If DATABASE_URL is set, talk to a real managed Postgres directly and skip the
+// in-memory PGlite engine and the Convex mirror entirely. The Node process then holds
+// only transient query results instead of the whole database, so it fits small hosts
+// (e.g. Render's 512MB tier). All existing SQL runs unchanged; createBaseTables() and
+// runMigrations() are idempotent, so they safely (re)create the schema on each boot.
+if (process.env.DATABASE_URL) {
+  const { Pool } = require('pg');
+  const sslDisabled = process.env.PGSSL === 'false';
+  const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    // Managed Postgres (Neon/Supabase/Render) requires TLS but usually presents a chain
+    // Node does not bundle, so don't reject unauthorized. Set PGSSL=false for a local
+    // Postgres without TLS.
+    ssl: sslDisabled ? false : { rejectUnauthorized: false },
+    max: parseInt(process.env.PG_POOL_MAX || '5', 10),
+  });
+  pool.on('error', (err) => console.error('[Postgres] idle client error:', err.message));
+
+  const query = (text, params) => pool.query(text, params);
+  console.log('[DB] Using external Postgres via DATABASE_URL (PGlite + Convex mirror disabled).');
+
+  module.exports = {
+    query,
+    pool,
+    directQuery: query,
+    directPool: pool,
+    loadFromConvex: async () => {},
+    syncTableToConvex: async () => {},
+  };
+  return; // Skip the PGlite + Convex setup below.
+}
+
 const convexUrl = process.env.CONVEX_URL;
 let convexClient = null;
 if (convexUrl) {

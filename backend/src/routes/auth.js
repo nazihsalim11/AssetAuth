@@ -1,6 +1,6 @@
 const { WorkOS } = require('@workos-inc/node');
 const jwt = require('jsonwebtoken');
-const db = require('../../db');
+const { cq, cm } = require('../../convexApi');
 const emailChannel = require('../../notifications/channels/email');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -79,29 +79,18 @@ function register(app, { JWT_SECRET }) {
   // Super Admin, everyone else Employee. Returning users keep whatever role the database
   // holds — role is never taken from WorkOS. Returns { token, dbUser }.
   async function provisionAndIssueToken({ userEmail, workosUserId, firstName, lastName, workosSessionId }) {
-    const dbUserResult = await db.query(
-      'SELECT * FROM users WHERE LOWER(email) = LOWER($1) OR workos_user_id = $2',
-      [userEmail, workosUserId]
-    );
-    let dbUser = dbUserResult.rows[0];
-
-    if (!dbUser) {
-      const role = userEmail.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL ? 'Super Admin' : 'Employee';
-      const fullName = `${firstName} ${lastName}`.trim() || userEmail.split('@')[0];
-      const insertRes = await db.query(
-        `INSERT INTO users (workos_user_id, name, role, email, status)
-         VALUES ($1, $2, $3, $4, 'Active') RETURNING *`,
-        [workosUserId, fullName, role, userEmail]
-      );
-      dbUser = insertRes.rows[0];
-    } else if (dbUser.workos_user_id !== workosUserId) {
-      // Link a pre-seeded/mock profile to the real WorkOS id on first real sign-in.
-      await db.query(
-        'UPDATE users SET workos_user_id = $1 WHERE workos_user_id = $2',
-        [workosUserId, dbUser.workos_user_id]
-      );
-      dbUser.workos_user_id = workosUserId;
-    }
+    // Bootstrap email becomes Super Admin on first sign-in; everyone else Employee. The
+    // provision mutation only applies this role when inserting a new profile — returning
+    // users keep whatever role the database holds. It also relinks a pre-seeded profile
+    // to the real WorkOS id.
+    const role = userEmail.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL ? 'Super Admin' : 'Employee';
+    const fullName = `${firstName} ${lastName}`.trim() || userEmail.split('@')[0];
+    const dbUser = await cm('users:provision', {
+      workosUserId,
+      email: userEmail,
+      name: fullName,
+      role,
+    });
 
     const token = jwt.sign(
       {
@@ -324,11 +313,11 @@ function register(app, { JWT_SECRET }) {
 
     try {
       const decoded = jwt.verify(token, JWT_SECRET);
-      const result = await db.query('SELECT * FROM users WHERE workos_user_id = $1', [decoded.id]);
-      if (result.rows.length === 0) {
+      const dbUser = await cq('users:getByWorkosId', { workosUserId: decoded.id });
+      if (!dbUser) {
         return res.status(401).json({ error: 'User record not found', code: 'TOKEN_INVALID' });
       }
-      res.json({ token, session: buildSessionPayload(result.rows[0]) });
+      res.json({ token, session: buildSessionPayload(dbUser) });
     } catch (e) {
       const code = e.name === 'TokenExpiredError' ? 'TOKEN_EXPIRED' : 'TOKEN_INVALID';
       res.status(401).json({ error: 'Session expired or invalid. Please sign in again.', code });

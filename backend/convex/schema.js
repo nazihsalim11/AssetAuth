@@ -3,9 +3,9 @@ import { v } from "convex/values";
 
 export default defineSchema({
   users: defineTable(v.any())
-    .index("by_original_id", ["id"])
+    .index("by_workos_user_id", ["workos_user_id"])
     .index("by_email", ["email"])
-    .index("by_employeeId", ["employeeId"]),
+    .index("by_employee_id", ["employee_id"]),
   
   assets: defineTable(v.any())
     .index("by_original_id", ["id"])

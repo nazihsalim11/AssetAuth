@@ -1,11 +1,40 @@
-const bcrypt = require('bcryptjs');
-const db = require('../../db');
 const notifications = require('../../notifications');
 const emailChannel = require('../../notifications/channels/email');
 const validateAndFormatPhone = require('../utils/phone');
 const { WorkOS } = require('@workos-inc/node');
+const { cq, cm } = require('../../convexApi');
 
 const workos = process.env.WORKOS_API_KEY ? new WorkOS(process.env.WORKOS_API_KEY) : null;
+
+// Convex surfaces a ConvexError's payload as err.data; plain errors are wrapped. Pull a
+// clean, user-facing message out of either shape.
+function cleanConvexError(err) {
+  if (err && err.data) return typeof err.data === 'string' ? err.data : (err.data.message || 'Operation failed.');
+  const msg = (err && err.message) || 'Operation failed.';
+  const m = msg.match(/Uncaught (?:Convex)?Error:\s*(.+?)(?:\n|\s+at\s|$)/);
+  return m ? m[1].trim() : msg;
+}
+
+// Map a raw Convex user document to the shape the API/frontend expects: `id` is the
+// workos_user_id (the old SQL aliased it that way), and api.js camelCases the rest.
+function toApiUser(u) {
+  if (!u) return u;
+  return {
+    id: u.workos_user_id,
+    name: u.name,
+    role: u.role,
+    email: u.email,
+    employee_id: u.employee_id ?? null,
+    phone_number: u.phone_number ?? '',
+    department: u.department ?? '',
+    designation: u.designation ?? '',
+    location: u.location ?? '',
+    managerId: u.manager_id ?? null,
+    status: u.status,
+    notification_preferences: u.notification_preferences,
+    created_at: u.created_at,
+  };
+}
 
 // Starts a WorkOS-managed password reset and emails the hosted reset link. Used to let
 // newly provisioned users set their first password (WorkOS owns credentials; we never
@@ -30,75 +59,37 @@ async function sendResetLink(email) {
   }
 }
 
-// Reliable user creation helper used by both manual registration and bulk import
-async function createSingleUser(client, { workosUserId, name, role, email, employeeId, phoneNumber, department, designation, location, managerId, status }) {
-  const emailExists = await client.query('SELECT 1 FROM users WHERE LOWER(email) = LOWER($1)', [email]);
-  if (emailExists.rows.length > 0) {
-    throw new Error(`Email '${email}' is already registered.`);
-  }
-
-  if (employeeId) {
-    const empIdExists = await client.query('SELECT 1 FROM users WHERE LOWER(employee_id) = LOWER($1)', [employeeId]);
-    if (empIdExists.rows.length > 0) {
-      throw new Error(`Employee ID '${employeeId}' already exists. Please use a unique Employee ID.`);
+// Create the WorkOS login for a new user (or fall back to a mock id when WorkOS is
+// unconfigured), returning the id used as workos_user_id.
+async function ensureWorkosUserId(email, name) {
+  if (workos) {
+    try {
+      const workosUser = await workos.userManagement.createUser({
+        email,
+        emailVerified: true,
+        firstName: name.split(' ')[0] || '',
+        lastName: name.split(' ').slice(1).join(' ') || '',
+      });
+      return workosUser.id;
+    } catch (workosErr) {
+      console.warn('[WorkOS User Creation Warning] Failed to create user in WorkOS:', workosErr.message);
     }
   }
-
-  let finalWorkosUserId = workosUserId;
-  if (!finalWorkosUserId) {
-    if (workos) {
-      try {
-        const workosUser = await workos.userManagement.createUser({
-          email,
-          emailVerified: true,
-          firstName: name.split(' ')[0] || '',
-          lastName: name.split(' ').slice(1).join(' ') || '',
-        });
-        finalWorkosUserId = workosUser.id;
-      } catch (workosErr) {
-        console.warn('[WorkOS User Creation Warning] Failed to create user in WorkOS:', workosErr.message);
-      }
-    }
-    if (!finalWorkosUserId) {
-      finalWorkosUserId = 'mock-' + email.split('@')[0] + '-' + Math.random().toString(36).substring(2, 7);
-    }
-  }
-
-  // Insert into public.users
-  const query = `
-    INSERT INTO users (workos_user_id, name, role, email, employee_id, phone_number, department, designation, location, manager_id, status)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-    RETURNING workos_user_id AS id, name, role, email, employee_id, phone_number, department, designation, location, manager_id AS "managerId", status, created_at;
-  `;
-  const values = [
-    finalWorkosUserId,
-    name,
-    role,
-    email,
-    employeeId || null,
-    phoneNumber || '',
-    department || '',
-    designation || '',
-    location || '',
-    managerId || null,
-    status || 'Active'
-  ];
-  const result = await client.query(query, values);
-  return result.rows[0];
+  return 'mock-' + email.split('@')[0] + '-' + Math.random().toString(36).substring(2, 7);
 }
 
-// --- USER MANAGEMENT API ---
+const isMock = (id) => String(id || '').startsWith('mock-');
+
+// --- USER MANAGEMENT API (Convex-backed) ---
 function register(app, { requireUser, invalidateUserRole, actorOf, roleCan }) {
 
   app.get('/api/users', async (req, res) => {
     try {
-      const result = await db.query(
-        'SELECT workos_user_id AS id, name, role, email, employee_id, phone_number, department, designation, location, manager_id AS "managerId", status, created_at FROM users ORDER BY created_at DESC'
-      );
-      res.json(result.rows);
+      const rows = await cq('users:list');
+      res.json(rows.map(toApiUser));
     } catch (err) {
       console.error(err);
-      res.status(500).json({ error: 'Database query failed' });
+      res.status(500).json({ error: 'Failed to load users.' });
     }
   });
 
@@ -108,7 +99,6 @@ function register(app, { requireUser, invalidateUserRole, actorOf, roleCan }) {
       return res.status(400).json({ error: 'Name, role, and email are required.' });
     }
 
-    // Validate phone number format
     let formattedPhone = '';
     if (phoneNumber) {
       const phoneValidation = validateAndFormatPhone(phoneNumber);
@@ -118,43 +108,39 @@ function register(app, { requireUser, invalidateUserRole, actorOf, roleCan }) {
       formattedPhone = phoneValidation.value;
     }
 
-    const client = await db.pool.connect();
     try {
-      await client.query('BEGIN');
-      const createdUser = await createSingleUser(client, {
+      const workosUserId = await ensureWorkosUserId(email, name);
+      const doc = {
+        workos_user_id: workosUserId,
         name,
         role,
         email,
-        employeeId,
-        phoneNumber: formattedPhone,
-        department,
-        designation,
-        location,
-        managerId,
-        status,
-      });
-      await client.query('COMMIT');
+        employee_id: employeeId || null,
+        phone_number: formattedPhone || '',
+        department: department || '',
+        designation: designation || '',
+        location: location || '',
+        manager_id: managerId || null,
+        status: status || 'Active',
+      };
+      const created = toApiUser(await cm('users:create', { doc }));
 
-      // Email a WorkOS password-setup link so the new user can choose their password.
-      if (createdUser.id && !createdUser.id.startsWith('mock-')) {
-        await sendResetLink(createdUser.email);
+      if (created.id && !isMock(created.id)) {
+        await sendResetLink(created.email);
       }
 
-      res.status(201).json(createdUser);
+      res.status(201).json(created);
 
-      notifications.notify('user.created', `user-created:${createdUser.id}`, {
-        name: createdUser.name,
-        email: createdUser.email,
-        role: createdUser.role,
-        department: createdUser.department,
-        actor: actorOf(req)
+      notifications.notify('user.created', `user-created:${created.id}`, {
+        name: created.name,
+        email: created.email,
+        role: created.role,
+        department: created.department,
+        actor: actorOf(req),
       });
     } catch (err) {
-      await client.query('ROLLBACK');
       console.error('Error during manual user creation:', err);
-      res.status(400).json({ error: err.message || 'Database insertion failed.' });
-    } finally {
-      client.release();
+      res.status(400).json({ error: cleanConvexError(err) });
     }
   });
 
@@ -172,89 +158,49 @@ function register(app, { requireUser, invalidateUserRole, actorOf, roleCan }) {
       formattedPhone = phoneValidation.value;
     }
 
-    const client = await db.pool.connect();
     try {
-      await client.query('BEGIN');
+      const user = await cq('users:getByWorkosId', { workosUserId: id });
+      if (!user) return res.status(404).json({ error: 'User not found' });
 
-      // Check if user exists
-      const userResult = await client.query('SELECT * FROM users WHERE workos_user_id = $1', [id]);
-      if (userResult.rows.length === 0) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({ error: 'User not found' });
-      }
-      const user = userResult.rows[0];
-
-      // Guard role changes: only a User Management editor may change someone's role,
-      // and no one may change their own role (prevents self-elevation). Other profile
-      // fields (phone, notification preferences, etc.) are unaffected.
+      // Guard role changes: only a User Management editor may change someone's role, and
+      // no one may change their own (prevents self-elevation). Other fields unaffected.
       if (role !== undefined && role !== null && role !== user.role) {
         const caller = requireUser(req, res);
-        if (!caller) { await client.query('ROLLBACK'); return; }
+        if (!caller) return;
         if (String(caller.id) === String(id)) {
-          await client.query('ROLLBACK');
           return res.status(403).json({ error: 'You cannot change your own role.' });
         }
         if (!(await roleCan(caller, 'userManagement', 'edit'))) {
-          await client.query('ROLLBACK');
           return res.status(403).json({ error: 'Your role is not permitted to change user roles.' });
         }
       }
 
-      // Check duplicate employee ID
-      if (employeeId && (user.employee_id === null || employeeId.toLowerCase() !== user.employee_id.toLowerCase())) {
-        const empIdExists = await client.query('SELECT 1 FROM users WHERE LOWER(employee_id) = LOWER($1) AND workos_user_id <> $2', [employeeId, id]);
-        if (empIdExists.rows.length > 0) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({ error: `Employee ID '${employeeId}' already exists. Please use a unique Employee ID.` });
-        }
-      }
-
-      // Update WorkOS user status if changed and configured
-      if (workos && id && !id.startsWith('mock-')) {
-        if (status && status !== user.status) {
-          try {
-            if (status === 'Deactivated' || status === 'Inactive') {
-              await workos.userManagement.deactivateUser({ userId: id });
-            } else if (status === 'Active') {
-              await workos.userManagement.reactivateUser({ userId: id });
-            }
-          } catch (workosErr) {
-            console.warn('[WorkOS User Update Warning] Failed to update user status in WorkOS:', workosErr.message);
+      // Sync WorkOS account status when it changes.
+      if (workos && id && !isMock(id) && status && status !== user.status) {
+        try {
+          if (status === 'Deactivated' || status === 'Inactive') {
+            await workos.userManagement.deactivateUser({ userId: id });
+          } else if (status === 'Active') {
+            await workos.userManagement.reactivateUser({ userId: id });
           }
+        } catch (workosErr) {
+          console.warn('[WorkOS User Update Warning] Failed to update user status in WorkOS:', workosErr.message);
         }
       }
 
-      const query = `
-        UPDATE users 
-        SET role = COALESCE($1, role),
-            employee_id = COALESCE($2, employee_id),
-            phone_number = COALESCE($3, phone_number),
-            department = COALESCE($4, department),
-            designation = COALESCE($5, designation),
-            location = COALESCE($6, location),
-            manager_id = COALESCE($7, manager_id),
-            status = COALESCE($8, status),
-            notification_preferences = COALESCE($9, notification_preferences),
-            updated_at = NOW()
-        WHERE workos_user_id = $10
-        RETURNING workos_user_id AS id, name, role, email, employee_id, phone_number, department, designation, location, manager_id AS "managerId", status, notification_preferences, created_at;
-      `;
-      const values = [
-        role,
-        employeeId,
-        formattedPhone || phoneNumber || '',
-        department,
-        designation,
-        location,
-        managerId,
-        status,
-        notificationPreferences ? JSON.stringify(notificationPreferences) : null,
-        id
-      ];
-      const result = await client.query(query, values);
-      
-      await client.query('COMMIT');
-      const updated = result.rows[0];
+      // Only patch fields actually present in the request (mirrors the old COALESCE).
+      const patch = {};
+      if (role !== undefined) patch.role = role;
+      if (employeeId !== undefined) patch.employee_id = employeeId;
+      if (phoneNumber !== undefined) patch.phone_number = formattedPhone || phoneNumber || '';
+      if (department !== undefined) patch.department = department;
+      if (designation !== undefined) patch.designation = designation;
+      if (location !== undefined) patch.location = location;
+      if (managerId !== undefined) patch.manager_id = managerId;
+      if (status !== undefined) patch.status = status;
+      if (notificationPreferences !== undefined) patch.notification_preferences = notificationPreferences;
+
+      const updated = toApiUser(await cm('users:update', { workosUserId: id, patch }));
       res.json(updated);
 
       if (role && role !== user.role) {
@@ -264,37 +210,23 @@ function register(app, { requireUser, invalidateUserRole, actorOf, roleCan }) {
           email: updated.email,
           previousRole: user.role,
           newRole: role,
-          actor: actorOf(req)
+          actor: actorOf(req),
         });
       }
     } catch (err) {
-      await client.query('ROLLBACK');
       console.error(err);
-      res.status(500).json({ error: 'Database update failed: ' + (err.detail || err.message) });
-    } finally {
-      client.release();
+      res.status(400).json({ error: cleanConvexError(err) });
     }
   });
 
-  // DELETE /api/users/:id - Delete User
+  // DELETE /api/users/:id - Delete User (cascades assignments + recomputes assets in Convex)
   app.delete('/api/users/:id', async (req, res) => {
     const { id } = req.params;
-    const client = await db.pool.connect();
     try {
-      await client.query('BEGIN');
-      const check = await client.query('SELECT name, email, role FROM users WHERE workos_user_id = $1', [id]);
-      if (check.rows.length === 0) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({ error: 'User not found' });
-      }
-      const deletedUser = check.rows[0];
-      
-      // Find affected assets before deleting assignments
-      const affectedAssets = await client.query('SELECT DISTINCT asset_id FROM asset_assignments WHERE user_id = $1', [id]);
-      const affectedAssetIds = affectedAssets.rows.map(r => r.asset_id);
+      const deleted = await cm('users:remove', { workosUserId: id });
+      if (!deleted) return res.status(404).json({ error: 'User not found' });
 
-      await client.query('DELETE FROM asset_assignments WHERE user_id = $1', [id]);
-      if (workos && id && !id.startsWith('mock-')) {
+      if (workos && !isMock(id)) {
         try {
           await workos.userManagement.deleteUser({ userId: id });
         } catch (workosErr) {
@@ -302,53 +234,17 @@ function register(app, { requireUser, invalidateUserRole, actorOf, roleCan }) {
         }
       }
 
-      await client.query('DELETE FROM users WHERE workos_user_id = $1', [id]);
-
-      // Recalculate quantities for each affected asset
-      for (const assetId of affectedAssetIds) {
-        const activeAssignmentsRes = await client.query(`
-          SELECT employee_name, SUM(quantity) as qty
-          FROM asset_assignments
-          WHERE asset_id = $1 AND status = 'Assigned'
-          GROUP BY employee_name
-        `, [assetId]);
-        
-        const newAssignedQty = activeAssignmentsRes.rows.reduce((sum, row) => sum + parseInt(row.qty), 0);
-        const summaryStr = activeAssignmentsRes.rows.map(row => `${row.employee_name} (${row.qty})`).join(', ') || '';
-        
-        const assetInfo = await client.query('SELECT total_quantity FROM assets WHERE id = $1', [assetId]);
-        if (assetInfo.rows.length > 0) {
-          const newAvailableQty = Math.max(0, assetInfo.rows[0].total_quantity - newAssignedQty);
-          const newStatus = newAvailableQty > 0 ? 'Available' : 'Assigned';
-          
-          await client.query(`
-            UPDATE assets
-            SET 
-              assigned_quantity = $1, 
-              available_quantity = $2,
-              status = $3,
-              assigned_employee = $4,
-              updated_at = NOW()
-            WHERE id = $5
-          `, [newAssignedQty, newAvailableQty, newStatus, summaryStr || null, assetId]);
-        }
-      }
-
-      await client.query('COMMIT');
-      res.json({ message: `User "${deletedUser.name || deletedUser.email}" deleted successfully` });
+      res.json({ message: `User "${deleted.name || deleted.email}" deleted successfully` });
 
       notifications.notify('user.deleted', `user-deleted:${id}`, {
-        name: deletedUser.name,
-        email: deletedUser.email,
-        role: deletedUser.role,
-        actor: actorOf(req)
+        name: deleted.name,
+        email: deleted.email,
+        role: deleted.role,
+        actor: actorOf(req),
       });
     } catch (err) {
-      await client.query('ROLLBACK');
       console.error(err);
-      res.status(500).json({ error: 'Database deletion failed' });
-    } finally {
-      client.release();
+      res.status(500).json({ error: 'User deletion failed: ' + cleanConvexError(err) });
     }
   });
 
@@ -358,20 +254,11 @@ function register(app, { requireUser, invalidateUserRole, actorOf, roleCan }) {
     if (!Array.isArray(userIds) || userIds.length === 0) {
       return res.status(400).json({ error: 'Payload must contain a userIds array' });
     }
-    const client = await db.pool.connect();
     try {
-      await client.query('BEGIN');
-      const check = await client.query('SELECT workos_user_id FROM users WHERE workos_user_id = ANY($1::varchar[])', [userIds]);
-      const foundIds = check.rows.map(r => r.workos_user_id);
-      
-      // Find affected assets before deleting assignments
-      const affectedAssets = await client.query('SELECT DISTINCT asset_id FROM asset_assignments WHERE user_id = ANY($1::varchar[])', [foundIds]);
-      const affectedAssetIds = affectedAssets.rows.map(r => r.asset_id);
-
-      await client.query('DELETE FROM asset_assignments WHERE user_id = ANY($1::varchar[])', [foundIds]);
+      const result = await cm('users:bulkRemove', { workosUserIds: userIds });
       if (workos) {
-        for (const wId of foundIds) {
-          if (!wId.startsWith('mock-')) {
+        for (const wId of userIds) {
+          if (!isMock(wId)) {
             try {
               await workos.userManagement.deleteUser({ userId: wId });
             } catch (workosErr) {
@@ -380,47 +267,10 @@ function register(app, { requireUser, invalidateUserRole, actorOf, roleCan }) {
           }
         }
       }
-
-      await client.query('DELETE FROM users WHERE workos_user_id = ANY($1::varchar[])', [foundIds]);
-      
-      // Recalculate quantities for each affected asset
-      for (const assetId of affectedAssetIds) {
-        const activeAssignmentsRes = await client.query(`
-          SELECT employee_name, SUM(quantity) as qty
-          FROM asset_assignments
-          WHERE asset_id = $1 AND status = 'Assigned'
-          GROUP BY employee_name
-        `, [assetId]);
-        
-        const newAssignedQty = activeAssignmentsRes.rows.reduce((sum, row) => sum + parseInt(row.qty), 0);
-        const summaryStr = activeAssignmentsRes.rows.map(row => `${row.employee_name} (${row.qty})`).join(', ') || '';
-        
-        const assetInfo = await client.query('SELECT total_quantity FROM assets WHERE id = $1', [assetId]);
-        if (assetInfo.rows.length > 0) {
-          const newAvailableQty = Math.max(0, assetInfo.rows[0].total_quantity - newAssignedQty);
-          const newStatus = newAvailableQty > 0 ? 'Available' : 'Assigned';
-          
-          await client.query(`
-            UPDATE assets
-            SET 
-              assigned_quantity = $1, 
-              available_quantity = $2,
-              status = $3,
-              assigned_employee = $4,
-              updated_at = NOW()
-            WHERE id = $5
-          `, [newAssignedQty, newAvailableQty, newStatus, summaryStr || null, assetId]);
-        }
-      }
-
-      await client.query('COMMIT');
-      res.json({ message: `${userIds.length} users deleted successfully` });
+      res.json({ message: `${result.deleted} users deleted successfully` });
     } catch (err) {
-      await client.query('ROLLBACK');
       console.error(err);
       res.status(500).json({ error: 'Bulk deletion failed' });
-    } finally {
-      client.release();
     }
   });
 
@@ -433,7 +283,7 @@ function register(app, { requireUser, invalidateUserRole, actorOf, roleCan }) {
     try {
       if (workos) {
         for (const wId of userIds) {
-          if (!wId.startsWith('mock-')) {
+          if (!isMock(wId)) {
             try {
               if (status === 'Deactivated' || status === 'Inactive') {
                 await workos.userManagement.deactivateUser({ userId: wId });
@@ -446,7 +296,7 @@ function register(app, { requireUser, invalidateUserRole, actorOf, roleCan }) {
           }
         }
       }
-      await db.query('UPDATE users SET status = $1 WHERE workos_user_id = ANY($2::varchar[])', [status, userIds]);
+      await cm('users:bulkSetStatus', { workosUserIds: userIds, value: status });
       res.json({ message: `Status updated to "${status}" for ${userIds.length} users` });
     } catch (err) {
       console.error(err);
@@ -462,9 +312,12 @@ function register(app, { requireUser, invalidateUserRole, actorOf, roleCan }) {
     }
     try {
       if (workos) {
-        const { rows } = await db.query('SELECT email FROM users WHERE workos_user_id = ANY($1::varchar[])', [userIds]);
-        for (const userRow of rows) {
-          await sendResetLink(userRow.email);
+        const all = await cq('users:list');
+        const wanted = new Set(userIds.map(String));
+        for (const u of all) {
+          if (wanted.has(String(u.workos_user_id)) && u.email) {
+            await sendResetLink(u.email);
+          }
         }
       }
       res.json({ message: `Password reset instructions sent for ${userIds.length} users` });
@@ -481,7 +334,7 @@ function register(app, { requireUser, invalidateUserRole, actorOf, roleCan }) {
       return res.status(400).json({ error: 'Payload must contain userIds array and department' });
     }
     try {
-      await db.query('UPDATE users SET department = $1 WHERE workos_user_id = ANY($2::varchar[])', [department, userIds]);
+      await cm('users:bulkSetDepartment', { workosUserIds: userIds, value: department });
       res.json({ message: `Department updated to "${department}" for ${userIds.length} users` });
     } catch (err) {
       console.error(err);
@@ -505,7 +358,7 @@ function register(app, { requireUser, invalidateUserRole, actorOf, roleCan }) {
       return res.status(403).json({ error: 'You cannot change your own role.' });
     }
     try {
-      await db.query('UPDATE users SET role = $1 WHERE workos_user_id = ANY($2::varchar[])', [role, userIds]);
+      await cm('users:bulkSetRole', { workosUserIds: userIds, value: role });
       res.json({ message: `Role updated to "${role}" for ${userIds.length} users` });
     } catch (err) {
       console.error(err);
@@ -514,4 +367,4 @@ function register(app, { requireUser, invalidateUserRole, actorOf, roleCan }) {
   });
 }
 
-module.exports = { register, createSingleUser };
+module.exports = { register };

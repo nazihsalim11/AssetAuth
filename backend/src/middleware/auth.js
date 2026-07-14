@@ -4,6 +4,8 @@
 // per-domain route modules without re-wiring the JWT/role caches in each. The
 // behavior — token parsing, the two short-lived caches, and the module->verb gate —
 // is unchanged from when this lived inline in server.js.
+const { cq } = require('../../convexApi');
+
 module.exports = function createAuth({ db, jwt, permissionModel, JWT_SECRET, ALLOW_HEADER_AUTH }) {
   // --- ROLE PERMISSIONS ---
   // The authoritative permission matrix. Was frontend-only; now every client fetches
@@ -116,11 +118,11 @@ module.exports = function createAuth({ db, jwt, permissionModel, JWT_SECRET, ALL
     const cached = userRoleCache.get(user.id);
     if (cached && Date.now() - cached.at < USER_ROLE_TTL_MS) return cached.role;
     try {
-      // The session token's `id` is the workos_user_id, which is the users PK. Reading
-      // the live role here is what lets a Super Admin's role change take effect without
-      // the affected user re-logging in.
-      const { rows } = await db.query('SELECT role FROM users WHERE workos_user_id = $1', [user.id]);
-      const role = rows[0] ? rows[0].role : user.role;
+      // The session token's `id` is the workos_user_id. Reading the live role here is
+      // what lets a Super Admin's role change take effect without the affected user
+      // re-logging in. Resolved from Convex (the users source of truth).
+      const liveRole = await cq('users:getRole', { workosUserId: user.id });
+      const role = liveRole || user.role;
       userRoleCache.set(user.id, { role, at: Date.now() });
       return role;
     } catch {
@@ -184,10 +186,10 @@ module.exports = function createAuth({ db, jwt, permissionModel, JWT_SECRET, ALL
     if (user.department !== undefined && user.department !== null) return user;
 
     try {
-      const { rows } = await db.query('SELECT department, name FROM users WHERE workos_user_id = $1', [user.id]);
-      if (rows[0]) {
-        user.department = rows[0].department;
-        user.name = user.name || rows[0].name;
+      const u = await cq('users:getByWorkosId', { workosUserId: user.id });
+      if (u) {
+        user.department = u.department;
+        user.name = user.name || u.name;
       }
     } catch (err) {
       console.warn('Could not resolve department for user', user.id, err.message);
