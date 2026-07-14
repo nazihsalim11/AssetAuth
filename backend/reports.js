@@ -1,45 +1,70 @@
 /**
  * Reporting engine. Fourteen reports, each defined declaratively as a set of columns,
- * the filters it accepts, and a builder that runs one query. A single /api/reports/run
+ * the filters it accepts, and a builder that produces its rows. A single /api/reports/run
  * endpoint serves them all, so the frontend renders and exports any report generically.
  *
- * Filters are applied through buildWhere, which maps a report's supported filter keys to
- * real columns and produces a parameterised WHERE clause — no string interpolation of
- * user input.
+ * Backed by native Convex: builders fetch whole tables via generic:list and fold them in
+ * JS (the old SQL WHERE / JOIN / GROUP BY / COUNT-FILTER live here now). Filters are applied
+ * through filterRows, which maps a report's supported filter keys to real fields.
  *
- * Reports can also be scheduled: a row in scheduled_reports names a report, saved
- * filters, a cadence and recipients; runDueScheduledReports (driven by cron) generates
- * each due report as CSV and emails it.
+ * Reports can also be scheduled: a row in scheduled_reports names a report, saved filters,
+ * a cadence and recipients; runDueScheduledReports (driven by cron) generates each due
+ * report as CSV and emails it.
  */
 
-const db = require('./db');
+const { cq, cm } = require('./convexApi');
 const emailChannel = require('./notifications/channels/email');
 
 const col = (key, label, type = 'text') => ({ key, label, type });
 
-// Turn a report's supported filters into a WHERE clause. `map` maps a filter key to the
-// column (or expression) it constrains; only mapped, non-empty filters are applied.
-function buildWhere(filters, map, startIndex = 1) {
-  const conds = [];
-  const params = [];
-  let i = startIndex;
-  const eq = (c, v) => { conds.push(`${c} = $${i++}`); params.push(v); };
-  const like = (c, v) => { conds.push(`${c} ILIKE $${i++}`); params.push(`%${v}%`); };
+/* ------------------------------------------------------------ data access */
 
-  if (filters.department && map.department) eq(map.department, filters.department);
-  if (filters.category && map.category) eq(map.category, filters.category);
-  if (filters.branch && map.branch) eq(map.branch, filters.branch);
-  if (filters.status && map.status) eq(map.status, filters.status);
-  if (filters.priority && map.priority) eq(map.priority, filters.priority);
-  if (filters.vendor && map.vendor) eq(map.vendor, filters.vendor);
-  if (filters.employee && map.employee) like(map.employee, filters.employee);
-  if (filters.dateFrom && map.date) { conds.push(`${map.date} >= $${i++}`); params.push(filters.dateFrom); }
-  if (filters.dateTo && map.date) { conds.push(`${map.date} <= $${i++}`); params.push(filters.dateTo); }
+const strip = (d) => { if (!d) return d; const { _id, _creationTime, ...rest } = d; return rest; };
+// Fetch a whole table from Convex as plain rows (mirrored snake_case fields).
+const fetchAll = async (table) => (await cq('generic:list', { table })).map(strip);
 
-  return { clause: conds.length ? 'WHERE ' + conds.join(' AND ') : '', params, nextIndex: i };
+/* ------------------------------------------------------------ JS aggregation helpers */
+
+const money = (n) => `Rs ${Number(n || 0).toLocaleString('en-IN')}`;
+const lc = (s) => String(s == null ? '' : s).toLowerCase();
+const sum = (rows, f) => rows.reduce((s, r) => s + Number(r[f] || 0), 0);
+const day = (ts) => (ts ? new Date(ts).toISOString().slice(0, 10) : null);
+const todayUTC = () => new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00.000Z');
+const daysUntil = (dateStr) => (dateStr == null ? null : Math.round((new Date(dateStr) - todayUTC()) / 86400000));
+const CLOSED = new Set(['Resolved', 'Closed']);
+const isAssigned = (e) => e != null && String(e).trim() !== '' && e !== 'Inventory';
+const byMoneyDesc = (a, b, f) => Number(b[f] || 0) - Number(a[f] || 0);
+
+// JS analogue of the old buildWhere. `map` maps a filter key to the (flat) field it
+// constrains on each row; only mapped, non-empty filters are applied. `employee` matches
+// as a case-insensitive substring (the old ILIKE '%..%'); dates bound map.date.
+function filterRows(rows, filters, map) {
+  const eq = (key) => filters[key] && map[key];
+  return rows.filter((r) => {
+    if (eq('department') && r[map.department] !== filters.department) return false;
+    if (eq('category') && r[map.category] !== filters.category) return false;
+    if (eq('branch') && r[map.branch] !== filters.branch) return false;
+    if (eq('status') && r[map.status] !== filters.status) return false;
+    if (eq('priority') && r[map.priority] !== filters.priority) return false;
+    if (eq('vendor') && r[map.vendor] !== filters.vendor) return false;
+    if (eq('employee') && !lc(r[map.employee]).includes(lc(filters.employee))) return false;
+    if (filters.dateFrom && map.date && !(new Date(r[map.date]) >= new Date(filters.dateFrom))) return false;
+    if (filters.dateTo && map.date && !(new Date(r[map.date]) <= new Date(filters.dateTo))) return false;
+    return true;
+  });
 }
 
-const q = async (text, params) => (await db.query(text, params)).rows;
+// COALESCE(col,'Unspecified') group aggregation, returning an array of grouped rows built
+// by `make`, ordered by `order`. Only null becomes 'Unspecified' (empty strings stay).
+function groupRows(rows, key) {
+  const groups = new Map();
+  for (const r of rows) {
+    const k = r[key] == null ? 'Unspecified' : String(r[key]);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(r);
+  }
+  return groups;
+}
 
 /* --------------------------------------------------------------- the reports */
 
@@ -54,10 +79,10 @@ const REPORTS = {
       col('warranty_expiry', 'Warranty End', 'date'), col('department', 'Department'), col('location', 'Location')
     ],
     build: async (f) => {
-      const { clause, params } = buildWhere(f, { department: 'department', category: 'category', branch: 'location', status: 'status', date: 'purchase_date' });
-      const rows = await q(`SELECT id, name, serial_number, category, type, status, cost, purchase_date, warranty_expiry, department, location FROM assets ${clause} ORDER BY id`, params);
-      const totalCost = rows.reduce((s, r) => s + Number(r.cost || 0), 0);
-      return { rows, summary: { 'Total assets': rows.length, 'Total value': money(totalCost) } };
+      const assets = await fetchAll('assets');
+      const rows = filterRows(assets, f, { department: 'department', category: 'category', branch: 'location', status: 'status', date: 'purchase_date' })
+        .sort((a, b) => Number(a.id) - Number(b.id));
+      return { rows, summary: { 'Total assets': rows.length, 'Total value': money(sum(rows, 'cost')) } };
     }
   },
 
@@ -70,9 +95,11 @@ const REPORTS = {
       col('status', 'Status'), col('department', 'Department'), col('location', 'Location')
     ],
     build: async (f) => {
-      const { clause, params } = buildWhere(f, { department: 'department', category: 'category', branch: 'location', date: 'warranty_expiry' });
-      const where = clause ? `${clause} AND warranty_expiry IS NOT NULL` : 'WHERE warranty_expiry IS NOT NULL';
-      const rows = await q(`SELECT id, name, serial_number, warranty_expiry, (warranty_expiry - CURRENT_DATE) AS days_left, status, department, location FROM assets ${where} ORDER BY warranty_expiry`, params);
+      const assets = await fetchAll('assets');
+      const rows = filterRows(assets.filter((a) => a.warranty_expiry != null), f,
+        { department: 'department', category: 'category', branch: 'location', date: 'warranty_expiry' })
+        .map((a) => ({ ...a, days_left: daysUntil(a.warranty_expiry) }))
+        .sort((a, b) => String(a.warranty_expiry).localeCompare(String(b.warranty_expiry)));
       const expired = rows.filter((r) => Number(r.days_left) < 0).length;
       return { rows, summary: { 'Assets with warranty': rows.length, 'Already expired': expired } };
     }
@@ -87,8 +114,14 @@ const REPORTS = {
       col('cost', 'Annual Cost', 'money'), col('asset_count', 'Assets', 'number')
     ],
     build: async (f) => {
-      const { clause, params } = buildWhere(f, { vendor: 'm.vendor', date: 'm.end_date' });
-      const rows = await q(`SELECT m.id, m.vendor, m.start_date, m.end_date, (m.end_date - CURRENT_DATE) AS days_left, m.cost, COUNT(a.id)::int AS asset_count FROM amcs m LEFT JOIN assets a ON a.amc_id = m.id ${clause} GROUP BY m.id, m.vendor, m.start_date, m.end_date, m.cost ORDER BY m.end_date`, params);
+      const [amcs, assets] = await Promise.all([fetchAll('amcs'), fetchAll('assets')]);
+      const rows = filterRows(amcs, f, { vendor: 'vendor', date: 'end_date' })
+        .map((m) => ({
+          id: m.id, vendor: m.vendor, start_date: m.start_date, end_date: m.end_date,
+          days_left: daysUntil(m.end_date), cost: m.cost,
+          asset_count: assets.filter((a) => a.amc_id === m.id).length
+        }))
+        .sort((a, b) => String(a.end_date).localeCompare(String(b.end_date)));
       return { rows, summary: { 'Contracts': rows.length } };
     }
   },
@@ -101,11 +134,14 @@ const REPORTS = {
       col('assigned', 'Assigned', 'number'), col('total_value', 'Total Value', 'money')
     ],
     build: async (f) => {
-      const { clause, params } = buildWhere(f, { department: 'department', category: 'category' });
-      const where = clause ? `${clause} AND status <> 'Disposed'` : `WHERE status <> 'Disposed'`;
-      const rows = await q(`SELECT COALESCE(department, 'Unspecified') AS department, COUNT(*)::int AS total,
-        COUNT(*) FILTER (WHERE assigned_employee IS NOT NULL AND TRIM(assigned_employee) <> '' AND assigned_employee <> 'Inventory')::int AS assigned,
-        COALESCE(SUM(cost), 0) AS total_value FROM assets ${where} GROUP BY 1 ORDER BY total DESC`, params);
+      const assets = await fetchAll('assets');
+      const live = filterRows(assets.filter((a) => a.status !== 'Disposed'), f, { department: 'department', category: 'category' });
+      const rows = [...groupRows(live, 'department').entries()].map(([department, items]) => ({
+        department,
+        total: items.length,
+        assigned: items.filter((r) => isAssigned(r.assigned_employee)).length,
+        total_value: sum(items, 'cost')
+      })).sort((a, b) => b.total - a.total);
       return { rows, summary: { 'Departments': rows.length } };
     }
   },
@@ -118,11 +154,14 @@ const REPORTS = {
       col('assigned', 'Assigned', 'number'), col('total_value', 'Total Value', 'money')
     ],
     build: async (f) => {
-      const { clause, params } = buildWhere(f, { branch: 'location', category: 'category' });
-      const where = clause ? `${clause} AND status <> 'Disposed'` : `WHERE status <> 'Disposed'`;
-      const rows = await q(`SELECT COALESCE(location, 'Unspecified') AS location, COUNT(*)::int AS total,
-        COUNT(*) FILTER (WHERE assigned_employee IS NOT NULL AND TRIM(assigned_employee) <> '' AND assigned_employee <> 'Inventory')::int AS assigned,
-        COALESCE(SUM(cost), 0) AS total_value FROM assets ${where} GROUP BY 1 ORDER BY total DESC`, params);
+      const assets = await fetchAll('assets');
+      const live = filterRows(assets.filter((a) => a.status !== 'Disposed'), f, { branch: 'location', category: 'category' });
+      const rows = [...groupRows(live, 'location').entries()].map(([location, items]) => ({
+        location,
+        total: items.length,
+        assigned: items.filter((r) => isAssigned(r.assigned_employee)).length,
+        total_value: sum(items, 'cost')
+      })).sort((a, b) => b.total - a.total);
       return { rows, summary: { 'Branches': rows.length } };
     }
   },
@@ -135,8 +174,15 @@ const REPORTS = {
       col('department', 'Department'), col('quantity', 'Qty', 'number'), col('date', 'Assigned On', 'date'), col('status', 'Status')
     ],
     build: async (f) => {
-      const { clause, params } = buildWhere(f, { department: 'aa.department', employee: 'aa.employee_name', category: 'a.category', date: 'aa.date' });
-      const rows = await q(`SELECT aa.asset_id, a.name, aa.employee_name, aa.department, aa.quantity, aa.date, aa.status FROM asset_assignments aa LEFT JOIN assets a ON a.id = aa.asset_id ${clause} ORDER BY aa.date DESC`, params);
+      const [assignments, assets] = await Promise.all([fetchAll('asset_assignments'), fetchAll('assets')]);
+      const amap = new Map(assets.map((a) => [a.id, a]));
+      const joined = assignments.map((aa) => ({
+        asset_id: aa.asset_id, name: amap.get(aa.asset_id)?.name, employee_name: aa.employee_name,
+        department: aa.department, quantity: aa.quantity, date: aa.date, status: aa.status,
+        category: amap.get(aa.asset_id)?.category
+      }));
+      const rows = filterRows(joined, f, { department: 'department', employee: 'employee_name', category: 'category', date: 'date' })
+        .sort((a, b) => String(b.date).localeCompare(String(a.date)));
       return { rows, summary: { 'Allocations': rows.length } };
     }
   },
@@ -149,8 +195,15 @@ const REPORTS = {
       col('type', 'Movement'), col('from_loc', 'From'), col('to_loc', 'To'), col('actor', 'By'), col('notes', 'Notes')
     ],
     build: async (f) => {
-      const { clause, params } = buildWhere(f, { category: 'a.category', date: 'mv.date' });
-      const rows = await q(`SELECT mv.asset_id, a.name, mv.date, mv.type, mv.from_loc, mv.to_loc, mv.actor, mv.notes FROM movements mv LEFT JOIN assets a ON a.id = mv.asset_id ${clause} ORDER BY mv.date DESC, mv.id DESC`, params);
+      const [movements, assets] = await Promise.all([fetchAll('movements'), fetchAll('assets')]);
+      const amap = new Map(assets.map((a) => [a.id, a]));
+      const joined = movements.map((mv) => ({
+        asset_id: mv.asset_id, name: amap.get(mv.asset_id)?.name, date: mv.date, type: mv.type,
+        from_loc: mv.from_loc, to_loc: mv.to_loc, actor: mv.actor, notes: mv.notes,
+        category: amap.get(mv.asset_id)?.category, _mid: Number(mv.id) || 0
+      }));
+      const rows = filterRows(joined, f, { category: 'category', date: 'date' })
+        .sort((a, b) => String(b.date).localeCompare(String(a.date)) || b._mid - a._mid);
       return { rows, summary: { 'Movements': rows.length } };
     }
   },
@@ -164,8 +217,9 @@ const REPORTS = {
       col('created_at', 'Created', 'date'), col('resolution_due', 'Resolution Due', 'datetime')
     ],
     build: async (f) => {
-      const { clause, params } = buildWhere(f, { department: 'department', status: 'status', priority: 'priority', date: 'created_at' });
-      const rows = await q(`SELECT ticket_id, subject, department, priority, status, assigned_to_name, created_at, resolution_due FROM tickets ${clause} ORDER BY created_at DESC`, params);
+      const tickets = await fetchAll('tickets');
+      const rows = filterRows(tickets, f, { department: 'department', status: 'status', priority: 'priority', date: 'created_at' })
+        .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
       return { rows, summary: { 'Tickets': rows.length } };
     }
   },
@@ -175,16 +229,17 @@ const REPORTS = {
     filters: ['department', 'dateFrom', 'dateTo'],
     columns: [col('date', 'Date', 'date'), col('created', 'Created', 'number'), col('resolved', 'Resolved', 'number')],
     build: async (f) => {
-      const { clause, params } = buildWhere(f, { department: 'department' });
-      const start = f.dateFrom || new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10);
-      const end = f.dateTo || new Date().toISOString().slice(0, 10);
-      const createdWhere = clause ? `${clause} AND created_at::date BETWEEN $${params.length + 1} AND $${params.length + 2}` : `WHERE created_at::date BETWEEN $1 AND $2`;
-      const resolvedWhere = clause ? `${clause} AND resolved_at::date BETWEEN $${params.length + 1} AND $${params.length + 2}` : `WHERE resolved_at::date BETWEEN $1 AND $2`;
-      const created = await q(`SELECT created_at::date AS d, COUNT(*)::int AS c FROM tickets ${createdWhere} GROUP BY 1`, [...params, start, end]);
-      const resolved = await q(`SELECT resolved_at::date AS d, COUNT(*)::int AS c FROM tickets ${resolvedWhere} GROUP BY 1`, [...params, start, end]);
+      const tickets = await fetchAll('tickets');
+      const scoped = f.department ? tickets.filter((t) => t.department === f.department) : tickets;
+      const start = f.dateFrom || day(Date.now() - 29 * 86400000);
+      const end = f.dateTo || day(Date.now());
       const cMap = {}, rMap = {};
-      for (const r of created) cMap[r.d.toISOString().slice(0, 10)] = r.c;
-      for (const r of resolved) rMap[r.d.toISOString().slice(0, 10)] = r.c;
+      for (const t of scoped) {
+        const c = day(t.created_at);
+        if (c && c >= start && c <= end) cMap[c] = (cMap[c] || 0) + 1;
+        const r = day(t.resolved_at);
+        if (r && r >= start && r <= end) rMap[r] = (rMap[r] || 0) + 1;
+      }
       const rows = [];
       for (let d = new Date(start); d <= new Date(end); d.setDate(d.getDate() + 1)) {
         const key = d.toISOString().slice(0, 10);
@@ -203,10 +258,11 @@ const REPORTS = {
       col('resolution_breached', 'Breached', 'bool'), col('escalation_level', 'Esc. Level', 'number')
     ],
     build: async (f) => {
-      const { clause, params } = buildWhere(f, { department: 'department', priority: 'priority', status: 'status', date: 'created_at' });
-      const where = clause ? `${clause} AND resolution_due IS NOT NULL` : 'WHERE resolution_due IS NOT NULL';
-      const rows = await q(`SELECT ticket_id, priority, department, status, resolution_due, resolved_at, resolution_breached, escalation_level FROM tickets ${where} ORDER BY created_at DESC`, params);
-      const closed = rows.filter((r) => r.status === 'Resolved' || r.status === 'Closed');
+      const tickets = await fetchAll('tickets');
+      const rows = filterRows(tickets.filter((t) => t.resolution_due != null), f,
+        { department: 'department', priority: 'priority', status: 'status', date: 'created_at' })
+        .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+      const closed = rows.filter((r) => CLOSED.has(r.status));
       const met = closed.filter((r) => !r.resolution_breached).length;
       return { rows, summary: { 'Tickets under SLA': rows.length, 'Closed measured': closed.length, 'Compliance': closed.length ? `${Math.round((met / closed.length) * 100)}%` : 'n/a' } };
     }
@@ -221,22 +277,29 @@ const REPORTS = {
       col('avg_resolution_hours', 'Avg Res. (h)', 'number'), col('sla_compliance', 'SLA %', 'text')
     ],
     build: async (f) => {
-      const { clause, params } = buildWhere(f, { department: 't.department' });
-      const where = clause ? `${clause} AND t.assigned_to IS NOT NULL` : 'WHERE t.assigned_to IS NOT NULL';
-      const raw = await q(`SELECT u.name, u.department,
-          COUNT(*)::int AS assigned,
-          COUNT(*) FILTER (WHERE t.status IN ('Resolved','Closed'))::int AS resolved,
-          COUNT(*) FILTER (WHERE t.status NOT IN ('Resolved','Closed'))::int AS open_workload,
-          COUNT(*) FILTER (WHERE t.status IN ('Resolved','Closed') AND NOT t.resolution_breached)::int AS resolved_on_time,
-          AVG(EXTRACT(EPOCH FROM (t.resolved_at - t.created_at))/3600) FILTER (WHERE t.resolved_at IS NOT NULL) AS avg_resolution_hours
-        FROM tickets t JOIN users u ON u.workos_user_id = t.assigned_to ${where}
-        GROUP BY u.workos_user_id, u.name, u.department ORDER BY resolved DESC`, params);
-      const rows = raw.map((r) => ({
-        name: r.name, department: r.department, assigned: r.assigned, resolved: r.resolved,
-        open_workload: r.open_workload,
-        avg_resolution_hours: r.avg_resolution_hours == null ? null : Math.round(r.avg_resolution_hours * 10) / 10,
-        sla_compliance: r.resolved ? `${Math.round((r.resolved_on_time / r.resolved) * 100)}%` : 'n/a'
-      }));
+      const [tickets, users] = await Promise.all([fetchAll('tickets'), fetchAll('users')]);
+      const umap = new Map(users.map((u) => [u.workos_user_id, u]));
+      const scoped = tickets.filter((t) => t.assigned_to != null && umap.has(t.assigned_to)
+        && (!f.department || t.department === f.department));
+      const agg = new Map();
+      for (const t of scoped) {
+        let a = agg.get(t.assigned_to);
+        if (!a) {
+          const u = umap.get(t.assigned_to);
+          a = { name: u.name, department: u.department, assigned: 0, resolved: 0, open_workload: 0, resolved_on_time: 0, resSum: 0, resN: 0 };
+          agg.set(t.assigned_to, a);
+        }
+        a.assigned++;
+        if (CLOSED.has(t.status)) { a.resolved++; if (!t.resolution_breached) a.resolved_on_time++; }
+        else a.open_workload++;
+        if (t.resolved_at) { a.resSum += (new Date(t.resolved_at) - new Date(t.created_at)) / 3600000; a.resN++; }
+      }
+      const rows = [...agg.values()].map((a) => ({
+        name: a.name, department: a.department, assigned: a.assigned, resolved: a.resolved,
+        open_workload: a.open_workload,
+        avg_resolution_hours: a.resN ? Math.round((a.resSum / a.resN) * 10) / 10 : null,
+        sla_compliance: a.resolved ? `${Math.round((a.resolved_on_time / a.resolved) * 100)}%` : 'n/a'
+      })).sort((a, b) => b.resolved - a.resolved);
       return { rows, summary: { 'Technicians': rows.length } };
     }
   },
@@ -249,9 +312,10 @@ const REPORTS = {
       col('amount', 'Amount', 'money'), col('gst', 'GST %', 'number'), col('date', 'Date', 'date'), col('payment_status', 'Status')
     ],
     build: async (f) => {
-      const { clause, params } = buildWhere(f, { vendor: 'vendor', status: 'payment_status', date: 'date' });
-      const rows = await q(`SELECT id, po_reference, vendor, amount, gst, date, payment_status FROM invoices ${clause} ORDER BY date DESC`, params);
-      const total = rows.reduce((s, r) => s + Number(r.amount || 0), 0);
+      const invoices = await fetchAll('invoices');
+      const rows = filterRows(invoices, f, { vendor: 'vendor', status: 'payment_status', date: 'date' })
+        .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      const total = sum(rows, 'amount');
       const pending = rows.filter((r) => r.payment_status !== 'Paid').reduce((s, r) => s + Number(r.amount || 0), 0);
       return { rows, summary: { 'Invoices': rows.length, 'Total billed': money(total), 'Outstanding': money(pending) } };
     }
@@ -265,10 +329,16 @@ const REPORTS = {
       col('expected_delivery_date', 'Expected', 'date'), col('status', 'Status'), col('amount', 'Amount', 'money'), col('currency', 'Currency')
     ],
     build: async (f) => {
-      const { clause, params } = buildWhere(f, { vendor: 'vendor', status: 'status', date: 'issue_date' });
-      const rows = await q(`SELECT po_number, vendor, issue_date, expected_delivery_date, status, amount, currency FROM purchase_orders ${clause} ORDER BY issue_date DESC NULLS LAST`, params);
-      const total = rows.reduce((s, r) => s + Number(r.amount || 0), 0);
-      return { rows, summary: { 'Orders': rows.length, 'Total value': money(total) } };
+      const pos = await fetchAll('purchase_orders');
+      // ORDER BY issue_date DESC NULLS LAST
+      const rows = filterRows(pos, f, { vendor: 'vendor', status: 'status', date: 'issue_date' })
+        .sort((a, b) => {
+          if (!a.issue_date && !b.issue_date) return 0;
+          if (!a.issue_date) return 1;
+          if (!b.issue_date) return -1;
+          return String(b.issue_date).localeCompare(String(a.issue_date));
+        });
+      return { rows, summary: { 'Orders': rows.length, 'Total value': money(sum(rows, 'amount')) } };
     }
   },
 
@@ -280,45 +350,45 @@ const REPORTS = {
       col('invoice_count', 'Invoices', 'number'), col('invoice_spend', 'Invoiced', 'money'), col('amc_count', 'AMC Contracts', 'number')
     ],
     build: async (f) => {
-      const { clause, params } = buildWhere(f, { vendor: 'v.name' });
-      // Correlated subqueries per metric so joins across POs/invoices/AMCs can't inflate
-      // one another's sums.
-      const rows = await q(`SELECT v.name AS vendor,
-          (SELECT COUNT(*)::int FROM purchase_orders po WHERE po.vendor_id = v.id) AS po_count,
-          (SELECT COALESCE(SUM(amount),0) FROM purchase_orders po WHERE po.vendor_id = v.id) AS po_spend,
-          (SELECT COUNT(*)::int FROM invoices i WHERE LOWER(i.vendor) = LOWER(v.name)) AS invoice_count,
-          (SELECT COALESCE(SUM(amount),0) FROM invoices i WHERE LOWER(i.vendor) = LOWER(v.name)) AS invoice_spend,
-          (SELECT COUNT(*)::int FROM amcs m WHERE LOWER(m.vendor) = LOWER(v.name)) AS amc_count
-        FROM vendors v ${clause} ORDER BY po_spend DESC`, params);
+      const [vendors, pos, invoices, amcs] = await Promise.all([
+        fetchAll('vendors'), fetchAll('purchase_orders'), fetchAll('invoices'), fetchAll('amcs')
+      ]);
+      // Per-metric folds keep POs/invoices/AMCs from inflating one another (the old
+      // correlated subqueries).
+      let rows = vendors.map((v) => {
+        const vp = pos.filter((p) => p.vendor_id === v.id);
+        const vi = invoices.filter((i) => lc(i.vendor) === lc(v.name));
+        const vm = amcs.filter((m) => lc(m.vendor) === lc(v.name));
+        return {
+          vendor: v.name,
+          po_count: vp.length, po_spend: sum(vp, 'amount'),
+          invoice_count: vi.length, invoice_spend: sum(vi, 'amount'),
+          amc_count: vm.length
+        };
+      });
+      if (f.vendor) rows = rows.filter((r) => r.vendor === f.vendor);
+      rows.sort((a, b) => byMoneyDesc(a, b, 'po_spend'));
       return { rows, summary: { 'Vendors': rows.length } };
     }
   }
 };
 
-const money = (n) => `Rs ${Number(n || 0).toLocaleString('en-IN')}`;
-
 /* -------------------------------------------------------------- filter options */
 
 async function filterOptions() {
-  const distinct = async (sql) => (await q(sql)).map((r) => r.v).filter((v) => v != null && String(v).trim() !== '');
-  const [departments, categories, branches, vendors, employees] = await Promise.all([
+  const [departments, assets, tickets, locations, vendorsT, amcs, invoices, users] = await Promise.all([
+    fetchAll('departments'), fetchAll('assets'), fetchAll('tickets'), fetchAll('locations'),
+    fetchAll('vendors'), fetchAll('amcs'), fetchAll('invoices'), fetchAll('users')
+  ]);
+  const clean = (arr) => [...new Set(arr.filter((v) => v != null && String(v).trim() !== ''))].sort((a, b) => String(a).localeCompare(String(b)));
+  return {
     // Prefer the masters (single source of truth), unioned with any values already present
     // on records so historical/legacy entries remain filterable.
-    distinct(`SELECT v FROM (
-                SELECT name AS v FROM departments WHERE is_active
-                UNION SELECT department FROM assets
-                UNION SELECT department FROM tickets
-              ) d ORDER BY 1`),
-    distinct(`SELECT DISTINCT category::text AS v FROM assets ORDER BY 1`),
-    distinct(`SELECT v FROM (
-                SELECT name AS v FROM locations WHERE is_active
-                UNION SELECT location FROM assets
-              ) l ORDER BY 1`),
-    distinct(`SELECT DISTINCT name AS v FROM vendors UNION SELECT DISTINCT vendor FROM amcs UNION SELECT DISTINCT vendor FROM invoices ORDER BY 1`),
-    distinct(`SELECT DISTINCT name AS v FROM users WHERE role::text <> 'Employee' ORDER BY 1`)
-  ]);
-  return {
-    departments, categories, branches, vendors, employees,
+    departments: clean([...departments.filter((d) => d.is_active).map((d) => d.name), ...assets.map((a) => a.department), ...tickets.map((t) => t.department)]),
+    categories: clean(assets.map((a) => a.category)),
+    branches: clean([...locations.filter((l) => l.is_active).map((l) => l.name), ...assets.map((a) => a.location)]),
+    vendors: clean([...vendorsT.map((v) => v.name), ...amcs.map((m) => m.vendor), ...invoices.map((i) => i.vendor)]),
+    employees: clean(users.filter((u) => String(u.role) !== 'Employee').map((u) => u.name)),
     ticketStatuses: ['Open', 'In Progress', 'Pending', 'On Hold', 'Waiting for Employee', 'Resolved', 'Closed', 'Reopened'],
     priorities: ['Critical', 'High', 'Medium', 'Low'],
     paymentStatuses: ['Pending', 'Partially Paid', 'Paid', 'Overdue'],
@@ -363,9 +433,16 @@ const mapSchedule = (r) => ({
   reportLabel: REPORTS[r.report_key]?.label || r.report_key
 });
 
+// Mirror a sent report into the Email Alerts Inbox (ON CONFLICT DO NOTHING on id).
+async function mirrorEmail(id, subject, body) {
+  await cm('reports:emailInsert', { email: { id, sender: 'AssetFlow Reports', date: new Date().toLocaleString(), subject, body } });
+}
+
 /** Generate and email every schedule whose next_run has passed. Driven by cron. */
 async function runDueScheduledReports() {
-  const due = await q(`SELECT * FROM scheduled_reports WHERE active = TRUE AND (next_run IS NULL OR next_run <= NOW())`);
+  const now = new Date();
+  const all = await cq('generic:list', { table: 'scheduled_reports' });
+  const due = all.map(strip).filter((s) => s.active && (s.next_run == null || new Date(s.next_run) <= now));
   let sent = 0;
   for (const s of due) {
     try {
@@ -379,16 +456,15 @@ async function runDueScheduledReports() {
       for (const to of s.recipients || []) {
         try {
           await emailChannel.send({ to, subject: `[Scheduled Report] ${report.title}`, body });
-          // Mirror into the Email Alerts Inbox so it is visible even on the log transport.
-          await db.query(
-            `INSERT INTO emails (id, sender, date, subject, body) VALUES ($1, 'AssetFlow Reports', $2, $3, $4) ON CONFLICT (id) DO NOTHING`,
-            [`RPT-${s.id}-${Date.now()}`, new Date().toLocaleString(), `[Scheduled Report] ${report.title}`, body]
-          );
+          await mirrorEmail(`RPT-${s.id}-${Date.now()}`, `[Scheduled Report] ${report.title}`, body);
         } catch (err) {
           console.error(`[reports] failed emailing schedule ${s.id} to ${to}:`, err.message);
         }
       }
-      await db.query(`UPDATE scheduled_reports SET last_run = NOW(), next_run = $1, updated_at = NOW() WHERE id = $2`, [nextRunFor(s.frequency), s.id]);
+      await cm('generic:update', {
+        table: 'scheduled_reports', idField: 'id', idVal: Number(s.id),
+        patch: { last_run: now.toISOString(), next_run: nextRunFor(s.frequency).toISOString(), updated_at: now.toISOString() }
+      });
       sent++;
     } catch (err) {
       console.error(`[reports] scheduled report ${s.id} failed:`, err.message);
@@ -433,10 +509,7 @@ function register(app, { requirePermission }) {
       const body = `${report.title}\nGenerated: ${new Date(report.generatedAt).toLocaleString()}\nRows: ${report.rows.length}\n\n${toCsv(report)}\n\n— AssetFlow Reports`;
       for (const to of recipients) {
         await emailChannel.send({ to, subject: `[Report] ${report.title}`, body });
-        await db.query(
-          `INSERT INTO emails (id, sender, date, subject, body) VALUES ($1, 'AssetFlow Reports', $2, $3, $4) ON CONFLICT (id) DO NOTHING`,
-          [`RPT-manual-${Date.now()}-${to.slice(0, 8)}`, new Date().toLocaleString(), `[Report] ${report.title}`, body]
-        );
+        await mirrorEmail(`RPT-manual-${Date.now()}-${to.slice(0, 8)}`, `[Report] ${report.title}`, body);
       }
       res.json({ ok: true, recipients: recipients.length, delivered: emailChannel.isConfigured });
     } catch (err) {
@@ -451,8 +524,8 @@ function register(app, { requirePermission }) {
     const user = await requirePermission(req, res, 'reports', 'view');
     if (!user) return;
     try {
-      const rows = await q('SELECT * FROM scheduled_reports ORDER BY created_at DESC');
-      res.json(rows.map(mapSchedule));
+      const rows = await cq('generic:list', { table: 'scheduled_reports', orderBy: 'created_at', orderDir: 'desc' });
+      res.json(rows.map(strip).map(mapSchedule));
     } catch (err) {
       console.error('GET /api/reports/scheduled failed:', err);
       res.status(500).json({ error: 'Could not load scheduled reports: ' + err.message });
@@ -468,12 +541,13 @@ function register(app, { requirePermission }) {
     if (!recipients.length) return res.status(400).json({ error: 'At least one recipient email is required.' });
     const frequency = ['daily', 'weekly', 'monthly'].includes(b.frequency) ? b.frequency : 'weekly';
     try {
-      const rows = await q(
-        `INSERT INTO scheduled_reports (report_key, name, filters, frequency, recipients, format, next_run, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-        [b.reportKey, b.name || REPORTS[b.reportKey].label, b.filters || {}, frequency, recipients, b.format || 'csv', nextRunFor(frequency), user.name]
-      );
-      res.status(201).json(mapSchedule(rows[0]));
+      const saved = await cm('reports:scheduledCreate', {
+        doc: {
+          report_key: b.reportKey, name: b.name || REPORTS[b.reportKey].label, filters: b.filters || {},
+          frequency, recipients, format: b.format || 'csv', next_run: nextRunFor(frequency).toISOString(), created_by: user.name
+        }
+      });
+      res.status(201).json(mapSchedule(saved));
     } catch (err) {
       console.error('POST /api/reports/scheduled failed:', err);
       res.status(500).json({ error: 'Could not create scheduled report: ' + err.message });
@@ -487,14 +561,13 @@ function register(app, { requirePermission }) {
     const frequency = ['daily', 'weekly', 'monthly'].includes(b.frequency) ? b.frequency : 'weekly';
     const recipients = Array.isArray(b.recipients) ? b.recipients.filter(Boolean) : [];
     try {
-      const rows = await q(
-        `UPDATE scheduled_reports SET name=$1, filters=$2, frequency=$3, recipients=$4, format=$5, active=$6, updated_at=NOW()
-         WHERE id=$7 RETURNING *`,
-        [b.name, b.filters || {}, frequency, recipients, b.format || 'csv', b.active !== false, req.params.id]
-      );
-      if (!rows.length) return res.status(404).json({ error: 'Scheduled report not found' });
-      res.json(mapSchedule(rows[0]));
+      const saved = await cm('generic:update', {
+        table: 'scheduled_reports', idField: 'id', idVal: Number(req.params.id),
+        patch: { name: b.name, filters: b.filters || {}, frequency, recipients, format: b.format || 'csv', active: b.active !== false, updated_at: new Date().toISOString() }
+      });
+      res.json(mapSchedule(strip(saved)));
     } catch (err) {
+      if (/not found/i.test(err.message)) return res.status(404).json({ error: 'Scheduled report not found' });
       console.error('PUT /api/reports/scheduled failed:', err);
       res.status(500).json({ error: 'Could not update scheduled report: ' + err.message });
     }
@@ -504,8 +577,8 @@ function register(app, { requirePermission }) {
     const user = await requirePermission(req, res, 'reports', 'export');
     if (!user) return;
     try {
-      const rows = await q('DELETE FROM scheduled_reports WHERE id = $1 RETURNING id', [req.params.id]);
-      if (!rows.length) return res.status(404).json({ error: 'Scheduled report not found' });
+      const removed = await cm('generic:remove', { table: 'scheduled_reports', idField: 'id', idVal: Number(req.params.id) });
+      if (!removed) return res.status(404).json({ error: 'Scheduled report not found' });
       res.json({ success: true });
     } catch (err) {
       console.error('DELETE /api/reports/scheduled failed:', err);
