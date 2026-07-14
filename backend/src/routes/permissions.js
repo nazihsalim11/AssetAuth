@@ -1,4 +1,4 @@
-const db = require('../../db');
+const { cm } = require('../../convexApi');
 const notifications = require('../../notifications');
 const permissionModel = require('../../permissionModel');
 
@@ -41,21 +41,14 @@ function register(app, { requireUser, roleCan, loadRolePermissions, invalidateRo
       return res.status(400).json({ error: 'Payload must be a { role: { module: { verb: bool } } } matrix' });
     }
 
-    const client = await db.pool.connect();
+    // Super Admin is unrestricted in code; storing its row would be misleading, so it is
+    // dropped before the upsert. Each remaining role is replaced wholesale.
+    const entries = Object.entries(clean)
+      .filter(([role]) => role !== 'Super Admin')
+      .map(([role, perms]) => ({ role, permissions: perms }));
+
     try {
-      await client.query('BEGIN');
-      for (const [role, perms] of Object.entries(clean)) {
-        // Super Admin is unrestricted in code; storing its row would be misleading.
-        if (role === 'Super Admin') continue;
-        await client.query(
-          `INSERT INTO role_permissions (role, permissions, updated_at)
-           VALUES ($1, $2::jsonb, NOW())
-           ON CONFLICT (role) DO UPDATE
-             SET permissions = EXCLUDED.permissions, updated_at = NOW()`,
-          [role, JSON.stringify(perms)]
-        );
-      }
-      await client.query('COMMIT');
+      await cm('permissions:upsertMany', { entries });
       invalidateRolePermissions(); // force a fresh read on the next enforcement check
 
       // Timestamped: every permissions edit is its own event, never deduplicated away.
@@ -64,17 +57,11 @@ function register(app, { requireUser, roleCan, loadRolePermissions, invalidateRo
         summary: Object.keys(clean).join(', ')
       });
 
-      await db.query(
-        `INSERT INTO system_logs (actor, action, detail) VALUES ($1,'Role Permissions',$2)`,
-        [user.name, `Updated: ${Object.keys(clean).join(', ')}`]
-      );
+      await cm('logs:add', { actor: user.name, action: 'Role Permissions', detail: `Updated: ${Object.keys(clean).join(', ')}` });
       res.json(await loadRolePermissions({ fresh: true }));
     } catch (err) {
-      await client.query('ROLLBACK');
       console.error('PATCH /api/role-permissions failed:', err);
       res.status(500).json({ error: 'Could not update role permissions: ' + err.message });
-    } finally {
-      client.release();
     }
   });
 }

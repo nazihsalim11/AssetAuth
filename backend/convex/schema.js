@@ -147,4 +147,7 @@ export default defineSchema({
   import_jobs: defineTable(v.any())
     .index("by_original_id", ["id"])
     .index("by_import_key", ["importKey"]),
+
+  role_permissions: defineTable(v.any())
+    .index("by_role", ["role"]),
 });

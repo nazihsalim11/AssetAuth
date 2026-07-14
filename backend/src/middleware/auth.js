@@ -20,7 +20,7 @@ module.exports = function createAuth({ db, jwt, permissionModel, JWT_SECRET, ALL
     if (!fresh && rolePermissionsCache && Date.now() - rolePermissionsCachedAt < ROLE_PERMS_TTL_MS) {
       return rolePermissionsCache;
     }
-    const { rows } = await db.query('SELECT role, permissions FROM role_permissions');
+    const rows = await cq('permissions:list');
     const stored = Object.fromEntries(rows.map((r) => [r.role, r.permissions]));
     // Layer stored edits on top of the code defaults so modules added after a role
     // was last saved (e.g. sla/dashboard/reports) fall back to their default grants

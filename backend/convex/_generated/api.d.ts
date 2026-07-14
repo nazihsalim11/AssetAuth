@@ -15,6 +15,7 @@ import type * as generic from "../generic.js";
 import type * as logs from "../logs.js";
 import type * as masters from "../masters.js";
 import type * as movements from "../movements.js";
+import type * as permissions from "../permissions.js";
 import type * as storage from "../storage.js";
 import type * as users from "../users.js";
 
@@ -32,6 +33,7 @@ declare const fullApi: ApiFromModules<{
   logs: typeof logs;
   masters: typeof masters;
   movements: typeof movements;
+  permissions: typeof permissions;
   storage: typeof storage;
   users: typeof users;
 }>;
