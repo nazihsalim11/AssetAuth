@@ -190,19 +190,24 @@
 - Location
 
 ## 13. Technical Scope
-### Suggested Technology Stack
+### Technology Stack (as implemented)
 ### Frontend
-- React / Angular
+- React 19 + Vite 8 (JavaScript / JSX), framer-motion, lucide-react
 ### Backend
-- Node.js / .NET / Java
-### Database
-- MySQL / PostgreSQL
+- Node.js (≥ 22) + Express REST API
+### Database & File Storage
+- Convex (serverless)
+### Authentication
+- WorkOS User Management (embedded email + password); HTTP-only JWT session
+  cookie; role-based access control owned by the application
+### Notifications
+- Email via SMTP (nodemailer) and SMS via Twilio; scheduled with node-cron
 ### Mobile Compatibility
 - Responsive Web Application
 ### QR Integration
-- QR generation and scanner support
+- QR generation (`qrcode`) and in-browser scanning (`html5-qrcode`)
 ### Hosting
-- Cloud or On-Premise Deployment
+- Cloud: backend on Render, frontend on Vercel, data on Convex Cloud
 
 ## 14. Non-Functional Requirements
 - Secure role-based access

@@ -3,7 +3,7 @@
 // api.js would create a cycle.
 //
 // Set VITE_API_URL in the Vercel project settings, e.g.
-//   VITE_API_URL=https://assetflow-api.up.railway.app/api
+//   VITE_API_URL=https://assetauth.onrender.com/api
 // Vite inlines it at build time, so a change requires a redeploy.
 export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 

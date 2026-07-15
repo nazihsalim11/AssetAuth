@@ -6,7 +6,16 @@
 
 ## Platform
 
-Built using the **Antigravity** framework.
+A single-page web application delivered as:
+
+-   **Frontend** — React 19 + Vite 8 (JavaScript / JSX), framer-motion,
+    lucide-react
+-   **Backend** — Node.js (≥ 22) + Express REST API
+-   **Data & file storage** — Convex (serverless)
+-   **Authentication** — WorkOS User Management (embedded email + password)
+-   **Hosting** — backend on Render, frontend on Vercel, data on Convex Cloud
+
+See [`README.md`](./README.md) for the full stack, setup, and deployment details.
 
 ------------------------------------------------------------------------
 
@@ -258,12 +267,50 @@ Search using
 
 ------------------------------------------------------------------------
 
+## 4.12 Helpdesk & SLA
+
+Ticketing for asset-related support and maintenance requests.
+
+-   Ticket queue, detail, and analytics
+-   SLA policies with response/resolution deadlines and escalation ladders
+-   Business-hours calendars and holiday sets
+-   Auto-assignment to technicians
+-   Breach detection and automated escalation (scheduled sweep)
+
+------------------------------------------------------------------------
+
+## 4.13 Knowledge Base
+
+-   Categories and articles
+-   Full-text search
+-   Reference material for support and onboarding
+
+------------------------------------------------------------------------
+
+## 4.14 Bulk Import
+
+-   Spreadsheet import of employees and assets
+-   Idempotent import jobs with per-row validation and duplicate guards
+-   Import progress tracking
+
+------------------------------------------------------------------------
+
+## 4.15 Email Alerts Inbox
+
+-   In-app mirror of outbound notification emails
+-   Per-user notification preferences and per-event recipient rules
+-   In-app notification bell feed
+
+------------------------------------------------------------------------
+
 # 5. Non-Functional Requirements
 
 -   Responsive UI
--   Role-Based Access Control
+-   Role-Based Access Control (roles owned by the app; only a Super Admin can
+    change roles, never their own)
 -   Audit Logs
--   Secure Authentication
+-   Secure Authentication via WorkOS (embedded email + password; HTTP-only JWT
+    session cookie; the app never stores passwords)
 -   Cloud Ready
 -   High Performance
 -   Scalable Architecture
