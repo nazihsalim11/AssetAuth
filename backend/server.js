@@ -29,6 +29,8 @@ const authRoutes = require('./src/routes/auth');
 const usersRoutes = require('./src/routes/users');
 const filesRoutes = require('./src/routes/files');
 const mastersRoutes = require('./src/routes/masters');
+const idSequencesRoutes = require('./src/routes/idSequences');
+const bulkRoutes = require('./src/routes/bulk');
 const createActorOf = require('./src/utils/actor');
 
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
@@ -199,6 +201,15 @@ usersRoutes.register(app, { requireUser, invalidateUserRole, actorOf, roleCan })
 // Database-driven master data; the dropdowns across every module read from these.
 // Registered here so its GET /api/departments supersedes the retired directory-derived one.
 mastersRoutes.register(app, { requirePermission, requireUser });
+
+// --- REUSABLE ID GENERATION ---
+// Shared next-id service (Employee IDs today; any registered entity tomorrow).
+idSequencesRoutes.register(app, { requireUser });
+
+// --- REUSABLE BULK MANAGEMENT FRAMEWORK ---
+// One shared import/update/delete/export/validate pipeline for every registered entity
+// (Vendors, AMC, …). See src/bulk/registry.js to add another entity.
+bulkRoutes.register(app, { requirePermission });
 
 // --- FILE UPLOAD API ---
 // Extracted verbatim to src/routes/files.js (upload + signed-url); the multer

@@ -3,6 +3,7 @@ const emailChannel = require('../../notifications/channels/email');
 const validateAndFormatPhone = require('../utils/phone');
 const { WorkOS } = require('@workos-inc/node');
 const { cq, cm } = require('../../convexApi');
+const idGenerator = require('../services/idGenerator');
 
 const workos = process.env.WORKOS_API_KEY ? new WorkOS(process.env.WORKOS_API_KEY) : null;
 
@@ -109,13 +110,25 @@ function register(app, { requireUser, invalidateUserRole, actorOf, roleCan }) {
     }
 
     try {
+      // Auto-assign the next Employee ID when the caller left it blank. A supplied id
+      // (prefilled or overridden) is respected; uniqueness is enforced atomically by
+      // users:create either way, so a concurrent collision is rejected rather than duplicated.
+      let resolvedEmployeeId = employeeId && String(employeeId).trim() ? String(employeeId).trim() : null;
+      if (!resolvedEmployeeId) {
+        try {
+          resolvedEmployeeId = (await idGenerator.reserve('employee')).nextId;
+        } catch (genErr) {
+          console.warn('[User Create] Could not auto-generate Employee ID:', genErr.message);
+        }
+      }
+
       const workosUserId = await ensureWorkosUserId(email, name);
       const doc = {
         workos_user_id: workosUserId,
         name,
         role,
         email,
-        employee_id: employeeId || null,
+        employee_id: resolvedEmployeeId || null,
         phone_number: formattedPhone || '',
         department: department || '',
         designation: designation || '',

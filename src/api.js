@@ -147,6 +147,24 @@ export const api = {
   // Auth Password Flow
   changePassword: (email, currentPassword, newPassword) => apiFetch('/auth/change-password', { method: 'POST', body: JSON.stringify({ email, currentPassword, newPassword }) }),
 
+  // Reusable bulk management framework. Rows are sent verbatim (keyed by the template's
+  // column headers) — never camel/snake-mapped — so the server's declared schema is the one
+  // source of truth for column names. Every bulk-enabled entity uses these same six calls.
+  getBulkSchema: (entity) => apiFetch(`/bulk/${entity}/schema`),
+  bulkValidate: (entity, rows) => apiFetch(`/bulk/${entity}/validate`, { method: 'POST', body: JSON.stringify({ rows }) }),
+  bulkPreview: (entity, rows) => apiFetch(`/bulk/${entity}/preview`, { method: 'POST', body: JSON.stringify({ rows }) }),
+  bulkImport: (entity, rows) => apiFetch(`/bulk/${entity}/import`, { method: 'POST', body: JSON.stringify({ rows }) }),
+  bulkUpdate: (entity, rows) => apiFetch(`/bulk/${entity}/update`, { method: 'POST', body: JSON.stringify({ rows }) }),
+  bulkDelete: (entity, ids) => apiFetch(`/bulk/${entity}/delete`, { method: 'POST', body: JSON.stringify({ ids }) }),
+  bulkExport: (entity) => apiFetch(`/bulk/${entity}/export`),
+
+  // Reusable ID generation. `next` previews the next id for an entity (employee, asset,
+  // vendor, …) without consuming it — the record's create call reserves the real one, so
+  // the prefilled value is just a suggestion the user may override.
+  getNextId: (entity) => apiFetch(`/id/${entity}/next`),
+  getIdConfig: (entity) => apiFetch(`/id/${entity}/config`),
+  updateIdConfig: (entity, fields) => apiFetch(`/id/${entity}/config`, { method: 'PATCH', body: JSON.stringify(fields) }),
+
   // Assets
   getAssets: () => apiFetch('/assets'),
   // Master data: valid Item Types (Asset Tag Subtypes) grouped by Asset Category.
@@ -417,6 +435,7 @@ export const api = {
 
   getKbCategories: () => apiFetch('/kb/categories'),
   createKbCategory: (category) => apiFetch('/kb/categories', { method: 'POST', body: JSON.stringify(category) }),
+  updateKbCategory: (id, fields) => apiFetch(`/kb/categories/${id}`, { method: 'PATCH', body: JSON.stringify(fields) }),
   deleteKbCategory: (id) => apiFetch(`/kb/categories/${id}`, { method: 'DELETE' }),
 
   getKbArticles: (params = {}) => {

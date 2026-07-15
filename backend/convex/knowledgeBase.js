@@ -205,6 +205,26 @@ export const createCategory = mutation({
   },
 });
 
+export const updateCategory = mutation({
+  args: { id: v.float64(), name: v.optional(v.string()), description: v.optional(v.any()), department: v.optional(v.any()) },
+  handler: async (ctx, { id, name, description, department }) => {
+    const cat = await ctx.db.query("kb_categories").filter((q) => q.eq(q.field("id"), id)).first();
+    if (!cat) return { notFound: true };
+    if (name !== undefined && norm(name).trim() !== norm(cat.name).trim()) {
+      const rows = await ctx.db.query("kb_categories").collect();
+      if (rows.some((c) => c._id !== cat._id && norm(c.name).trim() === norm(name).trim())) {
+        throw new ConvexError(`A category named "${name}" already exists.`);
+      }
+    }
+    const patch = { updated_at: nowIso() };
+    if (name !== undefined) patch.name = name.trim();
+    if (description !== undefined) patch.description = description ?? null;
+    if (department !== undefined) patch.department = department ?? null;
+    await ctx.db.patch(cat._id, patch);
+    return await ctx.db.get(cat._id);
+  },
+});
+
 export const deleteCategory = mutation({
   args: { id: v.float64() },
   handler: async (ctx, { id }) => {

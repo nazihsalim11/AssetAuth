@@ -2499,11 +2499,27 @@ function App() {
   // Values delivered to the extracted route pages via context (see AppDataContext).
   // App still owns this state and these handlers; the context only spares the pages a
   // long prop chain. Grows as more pages are extracted from the render below.
+  // Re-fetch AMC contracts from the server (after a bulk import/update/delete). Reuses the
+  // same asset-mapping the initial load applies, so the list shape stays consistent.
+  const refreshAmcs = async () => {
+    try {
+      const dbAmcs = await api.getAmcs();
+      setAmcs((dbAmcs || []).map(amc => ({
+        ...amc,
+        mappedAssets: assets.filter(a => a.amcId === amc.id).map(a => a.id),
+        serviceHistory: amc.serviceHistory || []
+      })));
+    } catch (err) {
+      addToast('Refresh failed', err.message || 'Could not reload AMC contracts.', 'error');
+    }
+  };
+
   const appData = {
     // shared helpers (used by most pages)
     can,
     navigate,
     addToast,
+    refreshAmcs,
     // core data
     assets,
     invoices,

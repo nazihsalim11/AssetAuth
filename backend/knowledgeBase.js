@@ -78,6 +78,30 @@ function register(app, { requireUser }) {
     }
   });
 
+  app.patch('/api/kb/categories/:id', async (req, res) => {
+    const user = requireAuthor(req, res);
+    if (!user) return;
+    const { name, description, department } = req.body;
+    if (name !== undefined && (!name || !String(name).trim())) {
+      return res.status(400).json({ error: 'Category name cannot be blank' });
+    }
+    try {
+      const result = await cm('knowledgeBase:updateCategory', {
+        id: Number(req.params.id),
+        ...(name !== undefined ? { name: String(name).trim() } : {}),
+        ...(description !== undefined ? { description } : {}),
+        ...(department !== undefined ? { department } : {}),
+      });
+      if (result && result.notFound) return res.status(404).json({ error: 'Category not found' });
+      res.json(stripSys(result));
+    } catch (err) {
+      const msg = cleanErr(err);
+      if (/already exists/i.test(msg)) return res.status(409).json({ error: msg });
+      console.error('PATCH /api/kb/categories failed:', err);
+      res.status(500).json({ error: 'Could not update category: ' + msg });
+    }
+  });
+
   app.delete('/api/kb/categories/:id', async (req, res) => {
     const user = requireAuthor(req, res);
     if (!user) return;

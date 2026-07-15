@@ -8,6 +8,7 @@ import {
 import { api } from './api';
 import { openStoredFile } from './files';
 import Modal from './Modal';
+import BulkManager from './BulkManager';
 import { SpinnerButton } from './SpinnerButton';
 import { downloadPoPdf, previewPoPdf, printPoPdf, poPdfFile } from './poPdf';
 
@@ -420,6 +421,7 @@ const VendorsView = ({ canManage, currencies, addToast }) => {
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [showBulk, setShowBulk] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -459,8 +461,14 @@ const VendorsView = ({ canManage, currencies, addToast }) => {
     <div className="card">
       <div className="card-title-section">
         <span className="card-title"><Building2 /> Vendor Master</span>
-        {canManage && <button className="btn btn-primary" onClick={() => setEditing('new')}><Plus size={15} /> New vendor</button>}
+        {canManage && (
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button className="btn btn-secondary" onClick={() => setShowBulk(true)}><Download size={15} /> Bulk manage</button>
+            <button className="btn btn-primary" onClick={() => setEditing('new')}><Plus size={15} /> New vendor</button>
+          </div>
+        )}
       </div>
+      <BulkManager entity="vendor" isOpen={showBulk} onClose={() => setShowBulk(false)} onComplete={load} addToast={addToast} />
       <div className="filters-row">
         <div className="search-bar-container" style={{ minWidth: 'min(280px, 100%)' }}>
           <Search className="search-icon" />

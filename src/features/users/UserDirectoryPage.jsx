@@ -24,6 +24,29 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
   const [formSuccess, setFormSuccess] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showRegisterModal, setShowRegisterModal] = useState(false);
+  // True while the Employee ID field is holding an auto-generated suggestion the user has
+  // not yet edited. Cleared the moment they type, so an override is never overwritten.
+  const [employeeIdAutofilled, setEmployeeIdAutofilled] = useState(false);
+
+  // Pre-fill the next Employee ID from the shared ID-generation service when the register
+  // modal opens. It is only a suggestion — the field stays fully editable, and the server
+  // reserves the real id (respecting an override) atomically on submit.
+  useEffect(() => {
+    if (!showRegisterModal || !isApiConnected) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { nextId } = await api.getNextId('employee');
+        if (!cancelled && nextId) {
+          setFormEmployeeId((current) => (current.trim() === '' ? nextId : current));
+          setEmployeeIdAutofilled((current) => current || true);
+        }
+      } catch {
+        // Non-fatal: the field simply stays blank and the server auto-assigns on submit.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [showRegisterModal, isApiConnected]);
 
   // Close register modal on Escape press
   useEffect(() => {
@@ -138,6 +161,7 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
       setFormName('');
       setFormEmail('');
       setFormEmployeeId('');
+      setEmployeeIdAutofilled(false);
       setFormPhoneNumber('');
       setFormDesignation('');
       setFormRole('Employee');
@@ -746,8 +770,15 @@ const UserDirectoryPage = ({ usersList, setUsersList, isApiConnected, onBulkImpo
         >
               <div className="form-group">
                 <label className="form-label">Employee ID</label>
-                <input className="form-input" type="text" placeholder="e.g. EMP-101"
-                  value={formEmployeeId} onChange={e => setFormEmployeeId(e.target.value)} disabled={isSubmitting} />
+                <input className="form-input" type="text" placeholder="e.g. EMP0001"
+                  value={formEmployeeId}
+                  onChange={e => { setFormEmployeeId(e.target.value); setEmployeeIdAutofilled(false); }}
+                  disabled={isSubmitting} />
+                {employeeIdAutofilled && formEmployeeId.trim() !== '' && (
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
+                    Auto-generated — edit to override, or leave blank to assign on save.
+                  </span>
+                )}
               </div>
               <div className="form-group">
                 <label className="form-label">Full Name *</label>

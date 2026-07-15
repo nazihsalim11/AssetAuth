@@ -62,14 +62,12 @@ export default function AssetsPage() {
 
                   <span style={{ fontSize: '13px', fontWeight: '600', marginLeft: '12px' }}>Department:</span>
                   <CustomSelect
+                    // Department options come from the Department Master (via context), the
+                    // same source the registration form and bulk pickers use — so adding,
+                    // renaming, archiving or deleting a department updates this filter too.
                     options={[
                       { value: "All", label: "All Departments" },
-                      { value: "Engineering", label: "Engineering" },
-                      { value: "HR", label: "HR" },
-                      { value: "Sales", label: "Sales" },
-                      { value: "Finance", label: "Finance" },
-                      { value: "Operations", label: "Operations" },
-                      { value: "IT", label: "IT" }
+                      ...departments.map((d) => ({ value: d, label: d }))
                     ]}
                     value={assetFilterDept}
                     onChange={(e) => setAssetFilterDept(e.target.value)}

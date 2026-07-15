@@ -6,6 +6,7 @@ import {
   FileText, Paperclip, Send, EyeOff, Save, X
 } from 'lucide-react';
 import { api } from './api';
+import { MasterList } from './features/masters/MasterDataPage';
 import { openStoredFile } from './files';
 import Markdown from './Markdown';
 import { SpinnerButton } from './SpinnerButton';
@@ -376,6 +377,30 @@ const KnowledgeBasePage = ({ canAuthor = false, addToast }) => {
           </div>
         )}
       </div>
+
+      {/* Category Master — reuses the same MasterList CRUD component the Departments &
+          Locations masters use. Categories have no archive state, so soft-delete is off.
+          Any change reloads the article list so every category dropdown reflects it at once. */}
+      {canAuthor && (
+        <details style={{ borderRadius: 'var(--radius-lg)' }}>
+          <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: '13px', color: 'var(--text-secondary)', padding: '4px 0' }}>
+            Manage Categories
+          </summary>
+          <div style={{ marginTop: '12px', display: 'flex' }}>
+            <MasterList
+              title="Knowledge Base Categories" noun="category"
+              softDelete={false}
+              listFn={api.getKbCategories}
+              createFn={api.createKbCategory}
+              updateFn={api.updateKbCategory}
+              deleteFn={api.deleteKbCategory}
+              canCreate canEdit canDelete
+              addToast={addToast}
+              onChanged={() => load()}
+            />
+          </div>
+        </details>
+      )}
 
       <div className="card">
         <div className="search-bar-container" style={{ height: '42px' }}>

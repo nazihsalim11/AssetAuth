@@ -11,10 +11,12 @@
 import type * as amc from "../amc.js";
 import type * as assets from "../assets.js";
 import type * as assignments from "../assignments.js";
+import type * as bulk from "../bulk.js";
 import type * as cleanupOrphans from "../cleanupOrphans.js";
 import type * as dashboards from "../dashboards.js";
 import type * as documents from "../documents.js";
 import type * as generic from "../generic.js";
+import type * as idSequences from "../idSequences.js";
 import type * as imports from "../imports.js";
 import type * as invoices from "../invoices.js";
 import type * as knowledgeBase from "../knowledgeBase.js";
@@ -41,10 +43,12 @@ declare const fullApi: ApiFromModules<{
   amc: typeof amc;
   assets: typeof assets;
   assignments: typeof assignments;
+  bulk: typeof bulk;
   cleanupOrphans: typeof cleanupOrphans;
   dashboards: typeof dashboards;
   documents: typeof documents;
   generic: typeof generic;
+  idSequences: typeof idSequences;
   imports: typeof imports;
   invoices: typeof invoices;
   knowledgeBase: typeof knowledgeBase;

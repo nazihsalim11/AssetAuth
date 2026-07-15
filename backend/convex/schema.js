@@ -148,6 +148,12 @@ export default defineSchema({
     .index("by_original_id", ["id"])
     .index("by_import_key", ["import_key"]),
 
+  // Reusable, race-safe entity-ID counters (see backend/convex/idSequences.js).
+  // One row per entity: { id, entity, prefix, padding, next_number, updated_at }.
+  id_sequences: defineTable(v.any())
+    .index("by_original_id", ["id"])
+    .index("by_entity", ["entity"]),
+
   role_permissions: defineTable(v.any())
     .index("by_role", ["role"]),
 

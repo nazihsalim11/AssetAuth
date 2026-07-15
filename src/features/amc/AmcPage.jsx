@@ -1,11 +1,14 @@
+import { useState } from 'react'
 import CustomSelect from '../../CustomSelect'
-import { RefreshCw, Search } from 'lucide-react'
+import { RefreshCw, Search, Download } from 'lucide-react'
 import { SpinnerButton } from '../../SpinnerButton'
 import { formatINR } from '../../utils/format'
 import { useAppData } from '../../context/AppDataContext'
+import BulkManager from '../../BulkManager'
 
 export default function AmcPage() {
-  const { addingAmc, addingServiceRecord, amcSearch, amcs, assets, filteredAmcs, handleAddAMC, handleAddAMCServiceRecord, handleMapAssetToAmc, hasPermission, mapAmcId, mapAssetId, mappingAmcAsset, newAmcServiceSchedule, setAmcSearch, setMapAmcId, setMapAssetId, setNewAmcServiceSchedule, vendors, newAmcVendorId, setNewAmcVendorId } = useAppData();
+  const { addingAmc, addingServiceRecord, amcSearch, amcs, assets, filteredAmcs, handleAddAMC, handleAddAMCServiceRecord, handleMapAssetToAmc, hasPermission, mapAmcId, mapAssetId, mappingAmcAsset, newAmcServiceSchedule, setAmcSearch, setMapAmcId, setMapAssetId, setNewAmcServiceSchedule, vendors, newAmcVendorId, setNewAmcVendorId, refreshAmcs, addToast } = useAppData();
+  const [showBulk, setShowBulk] = useState(false);
 
   return (
             <>
@@ -15,7 +18,16 @@ export default function AmcPage() {
                   <h1 className="page-title">Annual Maintenance Contracts</h1>
                   <span className="page-subtitle">Track vendor support contracts, SLA agreements, and servicing histories</span>
                 </div>
+                {hasPermission('finance') && (
+                  <div className="page-actions" style={{ display: 'flex', gap: '8px' }}>
+                    <button className="btn btn-secondary" onClick={() => setShowBulk(true)} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Download size={15} /> Bulk manage
+                    </button>
+                  </div>
+                )}
               </div>
+
+              <BulkManager entity="amc" isOpen={showBulk} onClose={() => setShowBulk(false)} onComplete={refreshAmcs} addToast={addToast} />
 
               <div className="stat-strip" style={{ marginBottom: '24px' }}>
                 <div className="stat-cell">

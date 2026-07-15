@@ -11,7 +11,7 @@ import { SpinnerButton } from '../../SpinnerButton';
  * seed here — an empty master shows an informative empty state, never placeholder values.
  * A failed load shows an error with Retry.
  */
-function MasterList({ title, noun, listFn, createFn, updateFn, deleteFn, canCreate, canEdit, canDelete, addToast, onChanged }) {
+export function MasterList({ title, noun, listFn, createFn, updateFn, deleteFn, canCreate, canEdit, canDelete, addToast, onChanged, softDelete = true }) {
   const [rows, setRows] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -131,8 +131,12 @@ function MasterList({ title, noun, listFn, createFn, updateFn, deleteFn, canCrea
 
       {!loading && !error && rows && rows.length > 0 && (
         <div className="master-list">
-          {rows.map((row) => (
-            <div key={row.id} className="master-row" style={{ opacity: row.isActive ? 1 : 0.6 }}>
+          {rows.map((row) => {
+            // Masters without an is_active column (e.g. KB categories, softDelete=false) are
+            // always "active" — the archive/restore controls simply do not apply to them.
+            const active = row.isActive !== false;
+            return (
+            <div key={row.id} className="master-row" style={{ opacity: active ? 1 : 0.6 }}>
               {editingId === row.id ? (
                 <>
                   <input className="form-input form-input-sm" value={editName} autoFocus
@@ -147,26 +151,27 @@ function MasterList({ title, noun, listFn, createFn, updateFn, deleteFn, canCrea
                 <>
                   <span className="master-row-name">
                     {row.name}
-                    {!row.isActive && <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: '8px' }}>(archived)</span>}
+                    {!active && <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: '8px' }}>(archived)</span>}
                   </span>
                   <div className="master-row-actions">
-                    {canEdit && row.isActive && (
+                    {canEdit && active && (
                       <button className="btn btn-secondary btn-sm" title="Rename" onClick={() => { setEditingId(row.id); setEditName(row.name); }}><Pencil size={13} /></button>
                     )}
-                    {canDelete && row.isActive && (
+                    {softDelete && canDelete && active && (
                       <button className="btn btn-secondary btn-sm" title="Archive (hide from pickers, keep history)" style={{ color: 'var(--status-maintenance)' }} onClick={() => archive(row)}><Archive size={13} /></button>
                     )}
-                    {canEdit && !row.isActive && (
+                    {softDelete && canEdit && !active && (
                       <button className="btn btn-secondary btn-sm" title="Restore" onClick={() => restore(row)}><RotateCcw size={13} /></button>
                     )}
                     {canDelete && (
-                      <button className="btn btn-secondary btn-sm" title="Delete permanently (only if unused)" style={{ color: 'var(--status-disposed)' }} onClick={() => remove(row)}><Trash2 size={13} /></button>
+                      <button className="btn btn-secondary btn-sm" title={softDelete ? 'Delete permanently (only if unused)' : 'Delete'} style={{ color: 'var(--status-disposed)' }} onClick={() => remove(row)}><Trash2 size={13} /></button>
                     )}
                   </div>
                 </>
               )}
             </div>
-          ))}
+          );
+          })}
         </div>
       )}
     </div>
