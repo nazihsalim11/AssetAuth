@@ -5,22 +5,32 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const jwt = require('jsonwebtoken');
 const permissionModel = require('./permissionModel.js');
+
+// Role resolution moved from SQL to Convex during the migration: the gate now reads the
+// caller's *live* role via cq('users:getRole') and the matrix via cq('permissions:list'),
+// not a SQL `db`. So the deterministic seam is the Convex client, which auth.js requires at
+// module load — stub it in the module cache BEFORE requiring auth.js, otherwise the lookup
+// hits the real deployment and the test cannot control the "current" role.
+let mockLiveRole = 'Super Admin'; // what users:getRole returns for the token's user id
+const convexApiPath = require.resolve('./convexApi.js');
+require.cache[convexApiPath] = {
+  id: convexApiPath,
+  filename: convexApiPath,
+  loaded: true,
+  exports: {
+    cq: async (name) => {
+      if (name === 'users:getRole') return mockLiveRole;
+      if (name === 'permissions:list') return []; // no stored edits -> the default matrix governs
+      return null;
+    },
+    cm: async () => null,
+    client: null,
+  },
+};
+
 const createAuth = require('./src/middleware/auth.js');
 
 const JWT_SECRET = 'test-secret';
-
-// A minimal db stub that answers only the queries the auth helpers issue. Each test
-// passes the role rows it wants; everything else returns an empty result.
-function makeDb({ userRole = 'Super Admin', permissions = [] } = {}) {
-  return {
-    query: async (text) => {
-      if (text.includes('FROM role_permissions')) return { rows: permissions };
-      if (text.includes('SELECT role FROM users')) return { rows: userRole ? [{ role: userRole }] : [] };
-      if (text.includes('SELECT department, name FROM users')) return { rows: [{ department: 'IT', name: 'Test User' }] };
-      return { rows: [] };
-    },
-  };
-}
 
 function makeRes() {
   return {
@@ -31,14 +41,11 @@ function makeRes() {
   };
 }
 
-function build(opts = {}) {
-  return createAuth({
-    db: makeDb(opts),
-    jwt,
-    permissionModel,
-    JWT_SECRET,
-    ALLOW_HEADER_AUTH: opts.ALLOW_HEADER_AUTH || false,
-  });
+// `userRole` is the role the Convex users:getRole lookup will report for the request — i.e.
+// the live/current role, which requirePermission must honour over whatever the token claims.
+function build({ userRole = 'Super Admin', ALLOW_HEADER_AUTH = false } = {}) {
+  mockLiveRole = userRole;
+  return createAuth({ jwt, permissionModel, JWT_SECRET, ALLOW_HEADER_AUTH });
 }
 
 test('authenticateRequest rejects a request with no credentials', () => {
