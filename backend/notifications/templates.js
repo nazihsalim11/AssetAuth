@@ -27,6 +27,16 @@ const money = (value) => {
   return Number.isFinite(n) ? `Rs ${n.toLocaleString('en-IN')}` : String(value ?? 'an unknown amount');
 };
 
+// A request's field-level diff, rendered for humans. `changes` is the shape produced by
+// backend/src/requests/diff.js: [{ label, before, after }].
+const val = (v) => (v === null || v === undefined || v === '' ? '(empty)' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+const changeList = (changes = []) =>
+  changes.length ? changes.map((c) => c.label).join(', ') : 'none';
+const changeBlock = (changes = []) =>
+  changes.length
+    ? changes.map((c) => `  • ${c.label}: ${val(c.before)} → ${val(c.after)}`).join('\n')
+    : '  (no field changes)';
+
 const templates = {
   'ticket.created': (c) => ({
     type: c.priority === 'Critical' ? 'error' : c.priority === 'Medium' ? 'warning' : 'info',
@@ -377,6 +387,125 @@ const templates = {
   }),
 
   /* ------------------------------------------------------------- system */
+
+  /* ----------------------------------------------------------- requests */
+  // One set of templates for every request type. The type's own label carries the
+  // specifics ("Purchase Order Edit Request", "Asset Disposal Request"), so a new
+  // workflow added to the registry is notified correctly without a template here.
+
+  'request.submitted': (c) => ({
+    type: 'info',
+    subject: `[${c.requestId}] ${c.requestTypeLabel} submitted for approval`,
+    inApp: `${c.requestId}: your ${c.requestTypeLabel} for ${c.recordLabel} is awaiting approval`,
+    email:
+      `Your request has been submitted and is now awaiting approval.\n\n` +
+      `Request:   ${c.requestId}\n` +
+      `Type:      ${c.requestTypeLabel}\n` +
+      `Record:    ${c.recordLabel}\n` +
+      `Priority:  ${c.priority}\n` +
+      `Reason:    ${c.reason}\n` +
+      `Changes:   ${changeList(c.changes)}\n` +
+      `Approval:  level 1 of ${c.totalLevels}\n\n` +
+      `The record stays unchanged until the request is approved.\n\n— AssetFlow Requests`,
+    sms: `AssetFlow: ${c.requestId} (${c.requestTypeLabel}) submitted for approval`
+  }),
+
+  'request.approval_requested': (c) => ({
+    type: c.priority === 'Critical' ? 'error' : c.priority === 'High' ? 'warning' : 'info',
+    subject: `[${c.requestId}] Your approval is needed: ${c.requestTypeLabel}`,
+    inApp: `${c.requestId}: ${c.requestedByName} needs your approval on ${c.recordLabel}`,
+    email:
+      `A request needs your approval.\n\n` +
+      `Request:     ${c.requestId}\n` +
+      `Type:        ${c.requestTypeLabel}\n` +
+      `Record:      ${c.recordLabel}\n` +
+      `Raised by:   ${c.requestedByName}\n` +
+      `Priority:    ${c.priority}\n` +
+      `Reason:      ${c.reason}\n` +
+      `${c.dueDate ? `Due by:      ${fmtDate(c.dueDate)}\n` : ''}` +
+      `Approval:    level ${c.currentLevel} of ${c.totalLevels}\n\n` +
+      `Proposed changes:\n${changeBlock(c.changes)}\n\n` +
+      `Open the Requests module to compare the current and proposed values before deciding.\n\n— AssetFlow Requests`,
+    sms: `AssetFlow: ${c.requestId} (${c.requestTypeLabel}, ${c.recordLabel}) needs your approval`
+  }),
+
+  'request.assigned': (c) => ({
+    type: 'info',
+    subject: `[${c.requestId}] Assigned to you for approval`,
+    inApp: `${c.requestId} (${c.requestTypeLabel}) has been assigned to you at level ${c.currentLevel}`,
+    email:
+      `A request has been reassigned to you for approval.\n\n` +
+      `Request:  ${c.requestId}\n` +
+      `Type:     ${c.requestTypeLabel}\n` +
+      `Record:   ${c.recordLabel}\n` +
+      `Level:    ${c.currentLevel} of ${c.totalLevels}\n` +
+      `Reason:   ${c.reason}\n\n— AssetFlow Requests`,
+    sms: `AssetFlow: ${c.requestId} assigned to you for approval`
+  }),
+
+  'request.approved': (c) => ({
+    type: 'info',
+    subject: `[${c.requestId}] Approved — changes applied`,
+    inApp: `${c.requestId} (${c.requestTypeLabel}) was approved and applied to ${c.recordLabel}`,
+    email:
+      `A request has been fully approved and its changes are now live on the record.\n\n` +
+      `Request:  ${c.requestId}\n` +
+      `Type:     ${c.requestTypeLabel}\n` +
+      `Record:   ${c.recordLabel}\n` +
+      `Raised by: ${c.requestedByName}\n\n` +
+      `Applied changes:\n${changeBlock(c.appliedChanges && c.appliedChanges.length ? c.appliedChanges : c.changes)}\n\n` +
+      `— AssetFlow Requests`,
+    sms: `AssetFlow: ${c.requestId} approved, changes applied to ${c.recordLabel}`
+  }),
+
+  'request.rejected': (c) => ({
+    type: 'warning',
+    subject: `[${c.requestId}] Rejected`,
+    inApp: `${c.requestId} (${c.requestTypeLabel}) was rejected — no changes were made`,
+    email:
+      `A request has been rejected. The record is unchanged.\n\n` +
+      `Request:  ${c.requestId}\n` +
+      `Type:     ${c.requestTypeLabel}\n` +
+      `Record:   ${c.recordLabel}\n` +
+      `Reason given: ${c.comment || 'none'}\n\n— AssetFlow Requests`,
+    sms: `AssetFlow: ${c.requestId} rejected - no changes made`
+  }),
+
+  'request.cancelled': (c) => ({
+    type: 'info',
+    subject: `[${c.requestId}] Cancelled`,
+    inApp: `${c.requestId} (${c.requestTypeLabel}) was cancelled`,
+    email:
+      `A request has been cancelled. The record is unchanged.\n\n` +
+      `Request: ${c.requestId}\n` +
+      `Type:    ${c.requestTypeLabel}\n` +
+      `Record:  ${c.recordLabel}\n\n— AssetFlow Requests`,
+    sms: `AssetFlow: ${c.requestId} cancelled`
+  }),
+
+  'request.info_requested': (c) => ({
+    type: 'warning',
+    subject: `[${c.requestId}] More information needed`,
+    inApp: `${c.requestId}: an approver needs more information before deciding`,
+    email:
+      `An approver has asked for more information before deciding on your request.\n\n` +
+      `Request: ${c.requestId}\n` +
+      `Type:    ${c.requestTypeLabel}\n` +
+      `Record:  ${c.recordLabel}\n\n` +
+      `What is needed:\n${c.comment}\n\n` +
+      `Reply on the request, attach anything relevant, and send it back for approval.\n\n— AssetFlow Requests`,
+    sms: `AssetFlow: ${c.requestId} - approver needs more information`
+  }),
+
+  'request.comment_added': (c) => ({
+    type: 'info',
+    subject: `[${c.requestId}] New comment from ${c.authorName}`,
+    inApp: `${c.authorName} commented on ${c.requestId}`,
+    email:
+      `${c.authorName} commented on request ${c.requestId} (${c.requestTypeLabel}, ${c.recordLabel}):\n\n` +
+      `${c.comment}\n\n— AssetFlow Requests`,
+    sms: `AssetFlow: ${c.authorName} commented on ${c.requestId}`
+  }),
 
   'system.bulk_import_completed': (c) => ({
     type: c.failed > 0 ? 'warning' : 'info',

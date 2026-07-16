@@ -11,6 +11,9 @@ import Modal from './Modal';
 import BulkManager from './BulkManager';
 import { SpinnerButton } from './SpinnerButton';
 import { downloadPoPdf, previewPoPdf, printPoPdf, poPdfFile } from './poPdf';
+// The Requests module's document list, reused verbatim for vendor paperwork — same upload /
+// preview / download / replace / delete behaviour over the same private-bucket storage.
+import { AttachmentList } from './features/requests/RequestPieces';
 
 const STATUS_BADGE = {
   Draft: 'badge',
@@ -356,59 +359,142 @@ const TotalsRow = ({ label, value, strong }) => (
 
 /* ============================================================ vendor editor */
 
-const VendorEditor = ({ vendor, currencies, onSave, onCancel }) => {
+const VendorEditor = ({ vendor, currencies, docTypes, onSave, onCancel, addToast }) => {
   const [form, setForm] = useState({
     name: vendor?.name || '', address: vendor?.address || '', gstVat: vendor?.gstVat || '',
+    gstNumber: vendor?.gstNumber || '', panNumber: vendor?.panNumber || '',
     contactPerson: vendor?.contactPerson || '', email: vendor?.email || '', phone: vendor?.phone || '',
+    bankName: vendor?.bankName || '', bankAccountNumber: vendor?.bankAccountNumber || '',
+    bankIfscSwift: vendor?.bankIfscSwift || '', bankAccountHolder: vendor?.bankAccountHolder || '',
     defaultPaymentTerms: vendor?.defaultPaymentTerms || '', defaultCurrency: vendor?.defaultCurrency || 'INR',
     isActive: vendor?.isActive ?? true
   });
   const [saving, setSaving] = useState(false);
+  const [tab, setTab] = useState('details');
+  const [documents, setDocuments] = useState([]);
+
+  const vendorId = vendor?.id;
+
+  const loadDocuments = useCallback(async () => {
+    if (!vendorId) return;
+    try {
+      setDocuments(await api.getVendorDocuments(vendorId));
+    } catch (err) {
+      addToast?.('Could not load documents', err.message, 'error');
+    }
+  }, [vendorId, addToast]);
+
+  useEffect(() => { loadDocuments(); }, [loadDocuments]);
+
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
   const submit = async (e) => {
     e.preventDefault();
     setSaving(true);
     try { await onSave(form); } finally { setSaving(false); }
   };
+
   return (
     <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-      <div className="form-grid">
-        <div className="form-group full-width">
-          <label className="form-label">Vendor name *</label>
-          <input className="form-input" value={form.name} onChange={set('name')} required />
+      {/* Documents need a saved vendor to hang off, so the tab only appears once one exists. */}
+      {vendorId && (
+        <div className="tabs-container">
+          <button type="button" className={`tab-btn ${tab === 'details' ? 'active' : ''}`} onClick={() => setTab('details')}>Details & banking</button>
+          <button type="button" className={`tab-btn ${tab === 'documents' ? 'active' : ''}`} onClick={() => setTab('documents')}>
+            Documents ({documents.length})
+          </button>
         </div>
-        <div className="form-group">
-          <label className="form-label">GST / VAT</label>
-          <input className="form-input" value={form.gstVat} onChange={set('gstVat')} />
+      )}
+
+      {tab === 'details' && (
+        <div className="form-grid">
+          <div className="form-group full-width">
+            <label className="form-label">Vendor name *</label>
+            <input className="form-input" value={form.name} onChange={set('name')} required />
+          </div>
+          <div className="form-group">
+            <label className="form-label">GST / VAT</label>
+            <input className="form-input" value={form.gstVat} onChange={set('gstVat')} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Contact person</label>
+            <input className="form-input" value={form.contactPerson} onChange={set('contactPerson')} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Email</label>
+            <input className="form-input" type="email" value={form.email} onChange={set('email')} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Phone</label>
+            <input className="form-input" value={form.phone} onChange={set('phone')} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Default payment terms</label>
+            <input className="form-input" value={form.defaultPaymentTerms} onChange={set('defaultPaymentTerms')} placeholder="e.g. 30 days net" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Default currency</label>
+            <CustomSelect value={form.defaultCurrency} onChange={set('defaultCurrency')} options={currencies.map((c) => ({ value: c, label: c }))} />
+          </div>
+          <div className="form-group full-width">
+            <label className="form-label">Address</label>
+            <textarea className="form-input" rows={2} value={form.address} onChange={set('address')} />
+          </div>
+
+          {/* --- Statutory & banking --- */}
+          <div className="form-group full-width" style={{ marginTop: '4px' }}>
+            <span className="card-subtitle">Statutory & banking</span>
+          </div>
+          <div className="form-group">
+            <label className="form-label">GST number</label>
+            <input className="form-input" value={form.gstNumber} onChange={set('gstNumber')} placeholder="e.g. 29ABCDE1234F1Z5" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">PAN number</label>
+            <input className="form-input" value={form.panNumber} onChange={set('panNumber')} placeholder="e.g. ABCDE1234F" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Bank name</label>
+            <input className="form-input" value={form.bankName} onChange={set('bankName')} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Account holder name</label>
+            <input className="form-input" value={form.bankAccountHolder} onChange={set('bankAccountHolder')} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Bank account number</label>
+            <input className="form-input" value={form.bankAccountNumber} onChange={set('bankAccountNumber')} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">IFSC / SWIFT code</label>
+            <input className="form-input" value={form.bankIfscSwift} onChange={set('bankIfscSwift')} />
+          </div>
         </div>
-        <div className="form-group">
-          <label className="form-label">Contact person</label>
-          <input className="form-input" value={form.contactPerson} onChange={set('contactPerson')} />
-        </div>
-        <div className="form-group">
-          <label className="form-label">Email</label>
-          <input className="form-input" type="email" value={form.email} onChange={set('email')} />
-        </div>
-        <div className="form-group">
-          <label className="form-label">Phone</label>
-          <input className="form-input" value={form.phone} onChange={set('phone')} />
-        </div>
-        <div className="form-group">
-          <label className="form-label">Default payment terms</label>
-          <input className="form-input" value={form.defaultPaymentTerms} onChange={set('defaultPaymentTerms')} placeholder="e.g. 30 days net" />
-        </div>
-        <div className="form-group">
-          <label className="form-label">Default currency</label>
-          <CustomSelect value={form.defaultCurrency} onChange={set('defaultCurrency')} options={currencies.map((c) => ({ value: c, label: c }))} />
-        </div>
-        <div className="form-group full-width">
-          <label className="form-label">Address</label>
-          <textarea className="form-input" rows={2} value={form.address} onChange={set('address')} />
-        </div>
-      </div>
+      )}
+
+      {tab === 'documents' && vendorId && (
+        <AttachmentList
+          attachments={documents}
+          canEdit
+          docTypes={docTypes}
+          addToast={addToast}
+          onAdd={async (doc) => { await api.addVendorDocument(vendorId, doc); await loadDocuments(); }}
+          onReplace={async (docId, doc) => { await api.replaceVendorDocument(vendorId, docId, doc); await loadDocuments(); }}
+          onDelete={async (docId) => {
+            try {
+              await api.deleteVendorDocument(vendorId, docId);
+              await loadDocuments();
+            } catch (err) {
+              addToast?.('Could not delete', err.message, 'error');
+            }
+          }}
+        />
+      )}
+
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-        <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={saving}>Cancel</button>
-        <button type="submit" className="btn btn-primary" disabled={saving}><Save size={14} /> {saving ? 'Saving…' : 'Save vendor'}</button>
+        <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={saving}>Close</button>
+        {tab === 'details' && (
+          <button type="submit" className="btn btn-primary" disabled={saving}><Save size={14} /> {saving ? 'Saving…' : 'Save vendor'}</button>
+        )}
       </div>
     </form>
   );
@@ -416,7 +502,7 @@ const VendorEditor = ({ vendor, currencies, onSave, onCancel }) => {
 
 /* ============================================================ vendors view */
 
-const VendorsView = ({ canManage, currencies, addToast }) => {
+const VendorsView = ({ canManage, currencies, docTypes, addToast }) => {
   const [vendors, setVendors] = useState([]);
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState(null);
@@ -514,7 +600,8 @@ const VendorsView = ({ canManage, currencies, addToast }) => {
 
       {editing && (
         <Modal isOpen onClose={() => setEditing(null)} title={editing === 'new' ? 'New vendor' : `Edit ${editing.name}`} maxWidth="640px">
-          <VendorEditor vendor={editing === 'new' ? null : editing} currencies={currencies} onSave={save} onCancel={() => setEditing(null)} />
+          <VendorEditor vendor={editing === 'new' ? null : editing} currencies={currencies} docTypes={docTypes}
+            onSave={save} onCancel={() => setEditing(null)} addToast={addToast} />
         </Modal>
       )}
     </div>
@@ -936,7 +1023,10 @@ const PurchaseOrdersPage = ({ canManage = false, can, invoices = [], amcs = [], 
         ))}
       </div>
 
-      {view === 'vendors' && <VendorsView canManage={canManageVendors} currencies={options.currencies || ['INR']} addToast={addToast} />}
+      {view === 'vendors' && (
+        <VendorsView canManage={canManageVendors} currencies={options.currencies || ['INR']}
+          docTypes={options.vendorDocTypes || ['Other']} addToast={addToast} />
+      )}
       {view === 'settings' && canManageSettings && (
         <SettingsView currencies={options.currencies || ['INR']} addToast={addToast}
           onSettingsChanged={(s) => setPoSettings((prev) => ({ ...prev, ...s }))} />

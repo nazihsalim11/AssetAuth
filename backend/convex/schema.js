@@ -144,6 +144,34 @@ export default defineSchema({
     .index("by_original_id", ["id"])
     .index("by_name", ["name"]),
 
+  // Vendor compliance/contract paperwork: many rows per vendor, one per uploaded file.
+  vendor_documents: defineTable(v.any())
+    .index("by_original_id", ["id"])
+    .index("by_vendor_id", ["vendor_id"]),
+
+  // --- Requests: the generic approval engine (see backend/src/requests/). ---
+  // One row per request of any type. `request_type` keys into the registry, which is what
+  // makes a new workflow a registry entry rather than new tables or new approval code.
+  requests: defineTable(v.any())
+    .index("by_original_id", ["id"])
+    .index("by_status", ["status"])
+    .index("by_request_type", ["request_type"])
+    .index("by_requested_by", ["requested_by"])
+    .index("by_record", ["module", "record_id"]),
+
+  request_comments: defineTable(v.any())
+    .index("by_original_id", ["id"])
+    .index("by_request_id", ["request_id"]),
+
+  request_attachments: defineTable(v.any())
+    .index("by_original_id", ["id"])
+    .index("by_request_id", ["request_id"]),
+
+  // Append-only. Nothing updates or deletes a row here — that is the audit guarantee.
+  request_history: defineTable(v.any())
+    .index("by_original_id", ["id"])
+    .index("by_request_id", ["request_id"]),
+
   import_jobs: defineTable(v.any())
     .index("by_original_id", ["id"])
     .index("by_import_key", ["import_key"]),

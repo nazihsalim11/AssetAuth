@@ -23,7 +23,8 @@ import {
   Moon,
   LogOut,
   Users,
-  Menu
+  Menu,
+  GitPullRequestArrow
 } from 'lucide-react'
 import { mockAuthService } from './auth'
 import LoginView from './LoginView'
@@ -63,6 +64,7 @@ const AmcPage = lazy(() => import('./features/amc/AmcPage'))
 const ReportsPage = lazy(() => import('./features/reports/ReportsPage'))
 const DocumentsPage = lazy(() => import('./features/documents/DocumentsPage'))
 const FinancePage = lazy(() => import('./features/finance/FinancePage'))
+const RequestsPage = lazy(() => import('./features/requests/RequestsPage'))
 import { clearCachedUserData } from './utils/cache'
 import { VALID_TABS } from './constants/tabs'
 import './App.css'
@@ -756,7 +758,7 @@ function App() {
   // view, not just to hide its nav item.
   const NAV_TO_MODULE = {
     dashboard: 'dashboard', assets: 'assets', allocations: 'allocations', amc: 'amc',
-    finance: 'finance', documents: 'documents', qr_lookup: 'qr', reports: 'reports',
+    finance: 'finance', requests: 'requests', documents: 'documents', qr_lookup: 'qr', reports: 'reports',
     emails: 'emails', tickets: 'tickets', sla: 'sla', knowledge_base: 'knowledge', users: 'userDirectory'
   };
   const activeModule = NAV_TO_MODULE[activeTab] || null;
@@ -2745,6 +2747,13 @@ function App() {
             </button>
           )}
 
+          {can('requests', 'view') && (
+            <button onClick={() => navigate('requests')} className={`nav-item ${activeTab === 'requests' ? 'active' : ''}`}>
+              <GitPullRequestArrow className="nav-icon" />
+              Requests & Approvals
+            </button>
+          )}
+
           {can('documents', 'view') && (
             <button onClick={() => navigate('documents')} className={`nav-item ${activeTab === 'documents' ? 'active' : ''}`}>
               <FolderOpen className="nav-icon" />
@@ -3001,6 +3010,12 @@ function App() {
 
                               {/* ==================== FINANCE & INVOICES ==================== */}
           {activeTab === 'finance' && <FinancePage />}
+
+          {/* ==================== REQUESTS & APPROVALS ==================== */}
+          {activeTab === 'requests' && (
+            <RequestsPage can={can} currentUser={currentUser} addToast={addToast} />
+          )}
+
           {/* ==================== DOCUMENT REPOSITORY ==================== */}
           {activeTab === 'documents' && !hasPermission('viewDocuments') && (
             <div className="card">

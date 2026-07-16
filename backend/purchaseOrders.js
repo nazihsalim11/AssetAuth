@@ -22,12 +22,17 @@ const { cq, cm } = require('./convexApi');
 const storage = require('./storage');
 const emailChannel = require('./notifications/channels/email');
 const { amountInWords, computeTotals } = require('./poFormat');
+// The PO writer, the vendor snapshot and the header validation live in src/services/poUpdate
+// so this route and the Requests approval engine share exactly one code path onto a PO.
+const poUpdate = require('./src/services/poUpdate');
 
-const PO_STATUSES = ['Draft', 'Issued', 'Partially Received', 'Received', 'Cancelled'];
-const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD'];
+const {
+  PO_STATUSES, CURRENCIES, DISCOUNT_TYPES, LOCKED_PO_STATUSES,
+  resolveVendorSnapshot: resolveVendor, validateHeader, linesToItems,
+} = poUpdate;
+
 const UNITS = ['pcs', 'nos', 'set', 'box', 'kg', 'ltr', 'mtr', 'hrs', 'license', 'unit'];
 const TAX_RATES = [0, 5, 12, 18, 28];
-const DISCOUNT_TYPES = ['amount', 'percent'];
 
 // Surface a ConvexError's message so route handlers can map it to an HTTP status.
 function cleanErr(err) {
@@ -97,15 +102,46 @@ const mapVendor = (row) => ({
   name: row.name,
   address: row.address,
   gstVat: row.gst_vat,
+  // gstVat is the legacy free-text field a PO snapshots onto itself; gstNumber is the
+  // registered identifier used for compliance. Kept apart rather than merged, because the
+  // POs already issued carry a copy of the old one and must keep reading it back.
+  gstNumber: row.gst_number ?? null,
+  panNumber: row.pan_number ?? null,
   contactPerson: row.contact_person,
   email: row.email,
   phone: row.phone,
+  bankName: row.bank_name ?? null,
+  bankAccountNumber: row.bank_account_number ?? null,
+  bankIfscSwift: row.bank_ifsc_swift ?? null,
+  bankAccountHolder: row.bank_account_holder ?? null,
   defaultPaymentTerms: row.default_payment_terms,
   defaultCurrency: row.default_currency,
   isActive: row.is_active,
+  documentCount: row.document_count !== undefined ? Number(row.document_count) : undefined,
   createdAt: row.created_at,
   updatedAt: row.updated_at
 });
+
+const mapVendorDocument = (row) => ({
+  id: row.id,
+  vendorId: row.vendor_id,
+  docType: row.doc_type,
+  fileName: row.file_name,
+  filePath: row.file_path,
+  fileType: row.file_type,
+  fileSize: row.file_size,
+  notes: row.notes,
+  uploadedBy: row.uploaded_by,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at ?? null
+});
+
+// The paperwork a vendor is expected to have on file. Open-ended by design — 'Other' takes
+// anything the list does not name, so an unusual document is filed rather than refused.
+const VENDOR_DOC_TYPES = [
+  'GST Certificate', 'PAN', 'Cancelled Cheque', 'Registration Certificate',
+  'Contract', 'Agreement', 'Certification', 'Other'
+];
 
 const mapDocument = (row) => ({
   id: row.id,
@@ -144,56 +180,6 @@ const mapSettings = (row) => ({
 
 const mapTerm = (r) => ({ version: r.version, content: r.content, updatedBy: r.updated_by, createdAt: r.created_at });
 
-// computeTotals emits camelCase lines; the Convex item rows are snake_case.
-const linesToItems = (lines) => lines.map((l) => ({
-  line_no: l.lineNo, description: l.description, hsn_code: l.hsnCode || null,
-  quantity: l.quantity, unit: l.unit, unit_price: l.unitPrice, tax_percent: l.taxPercent, line_total: l.lineTotal
-}));
-
-/** Resolve the vendor snapshot + sensible defaults for a create/update. */
-async function resolveVendor(body) {
-  let snapshot = {
-    vendor: (body.vendor || '').trim(),
-    vendorId: body.vendorId || null,
-    vendorAddress: body.vendorAddress || null,
-    vendorGst: body.vendorGst || null,
-    vendorContactPerson: body.vendorContactPerson || null,
-    vendorEmail: body.vendorEmail || null,
-    vendorPhone: body.vendorPhone || null,
-    defaultPaymentTerms: null,
-    defaultCurrency: null
-  };
-  if (body.vendorId) {
-    const v = await cq('purchaseOrders:vendorGet', { id: Number(body.vendorId) });
-    if (!v) throw Object.assign(new Error('Selected vendor no longer exists'), { statusCode: 400 });
-    snapshot = {
-      vendor: snapshot.vendor || v.name,
-      vendorId: v.id,
-      vendorAddress: body.vendorAddress ?? v.address,
-      vendorGst: body.vendorGst ?? v.gst_vat,
-      vendorContactPerson: body.vendorContactPerson ?? v.contact_person,
-      vendorEmail: body.vendorEmail ?? v.email,
-      vendorPhone: body.vendorPhone ?? v.phone,
-      defaultPaymentTerms: v.default_payment_terms,
-      defaultCurrency: v.default_currency
-    };
-  }
-  return snapshot;
-}
-
-/* ---------------------------------------------------------------- validation */
-
-const validateHeader = (body, { isCreate }) => {
-  if (isCreate && !body.issueDate) return 'PO Date is required';
-  if (isCreate && !body.vendorId && !(body.vendor && String(body.vendor).trim())) {
-    return 'A vendor is required — pick one from the vendor master or type a name';
-  }
-  if (body.status && !PO_STATUSES.includes(body.status)) return `Status must be one of: ${PO_STATUSES.join(', ')}`;
-  if (body.currency && !CURRENCIES.includes(body.currency)) return `Currency must be one of: ${CURRENCIES.join(', ')}`;
-  if (body.discountType && !DISCOUNT_TYPES.includes(body.discountType)) return 'Discount type must be amount or percent';
-  return null;
-};
-
 const logAction = (actor, action, detail) => cm('logs:add', { actor, action, detail }).catch((e) => console.warn('[po] log failed:', e.message));
 
 /* ================================================================ endpoints */
@@ -207,7 +193,14 @@ function register(app, { requirePermission, requireUser, roleCan }) {
   /* ---------------------------------------------------------------- options */
 
   app.get('/api/purchase-orders/options', (req, res) => {
-    res.json({ statuses: PO_STATUSES, currencies: CURRENCIES, units: UNITS, taxRates: TAX_RATES, discountTypes: DISCOUNT_TYPES });
+    res.json({
+      statuses: PO_STATUSES, currencies: CURRENCIES, units: UNITS, taxRates: TAX_RATES,
+      discountTypes: DISCOUNT_TYPES,
+      // The UI reads the lock from here rather than hardcoding a status list, so it offers
+      // "raise an edit request" on exactly the orders the server will actually refuse.
+      lockedStatuses: LOCKED_PO_STATUSES,
+      vendorDocTypes: VENDOR_DOC_TYPES
+    });
   });
 
   /* ---------------------------------------------------------------- vendors */
@@ -241,7 +234,11 @@ function register(app, { requirePermission, requireUser, roleCan }) {
   app.post('/api/vendors', async (req, res) => {
     const user = await requirePermission(req, res, 'vendors', 'create');
     if (!user) return;
-    const { name, address, gstVat, contactPerson, email, phone, defaultPaymentTerms, defaultCurrency } = req.body;
+    const {
+      name, address, gstVat, gstNumber, panNumber, contactPerson, email, phone,
+      bankName, bankAccountNumber, bankIfscSwift, bankAccountHolder,
+      defaultPaymentTerms, defaultCurrency
+    } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'Vendor name is required' });
     if (defaultCurrency && !CURRENCIES.includes(defaultCurrency)) {
       return res.status(400).json({ error: `Currency must be one of: ${CURRENCIES.join(', ')}` });
@@ -250,7 +247,10 @@ function register(app, { requirePermission, requireUser, roleCan }) {
       const v = await cm('purchaseOrders:vendorCreate', {
         doc: {
           name: String(name).trim(), address: address || null, gst_vat: gstVat || null,
+          gst_number: gstNumber || null, pan_number: panNumber || null,
           contact_person: contactPerson || null, email: email || null, phone: phone || null,
+          bank_name: bankName || null, bank_account_number: bankAccountNumber || null,
+          bank_ifsc_swift: bankIfscSwift || null, bank_account_holder: bankAccountHolder || null,
           default_payment_terms: defaultPaymentTerms || null, default_currency: defaultCurrency || 'INR', created_by: user.name
         }
       });
@@ -267,8 +267,12 @@ function register(app, { requirePermission, requireUser, roleCan }) {
     const user = await requirePermission(req, res, 'vendors', 'edit');
     if (!user) return;
     const columns = {
-      name: 'name', address: 'address', gstVat: 'gst_vat', contactPerson: 'contact_person',
-      email: 'email', phone: 'phone', defaultPaymentTerms: 'default_payment_terms',
+      name: 'name', address: 'address', gstVat: 'gst_vat', gstNumber: 'gst_number',
+      panNumber: 'pan_number', contactPerson: 'contact_person',
+      email: 'email', phone: 'phone',
+      bankName: 'bank_name', bankAccountNumber: 'bank_account_number',
+      bankIfscSwift: 'bank_ifsc_swift', bankAccountHolder: 'bank_account_holder',
+      defaultPaymentTerms: 'default_payment_terms',
       defaultCurrency: 'default_currency', isActive: 'is_active'
     };
     if (req.body.defaultCurrency && !CURRENCIES.includes(req.body.defaultCurrency)) {
@@ -301,6 +305,88 @@ function register(app, { requirePermission, requireUser, roleCan }) {
     } catch (err) {
       console.error('DELETE /api/vendors failed:', err);
       res.status(500).json({ error: 'Could not delete vendor: ' + err.message });
+    }
+  });
+
+  /* ------------------------------------------------------ vendor documents */
+
+  // Multi-document support for the vendor master: GST certificate, PAN, cancelled cheque,
+  // registration, contracts, agreements, certifications, anything else. The browser uploads
+  // via POST /api/upload and records the returned storage path here; preview and download
+  // both go through POST /api/files/signed-url, so neither needs a route of its own.
+
+  app.get('/api/vendors/:id/documents', async (req, res) => {
+    const user = requireUser(req, res);
+    if (!user) return;
+    if (!(await canReadProcurement(user))) return res.status(403).json({ error: 'Your role is not permitted to view vendor documents.' });
+    try {
+      const rows = await cq('purchaseOrders:vendorDocumentsList', { vendorId: Number(req.params.id) });
+      res.json(rows.map(mapVendorDocument));
+    } catch (err) {
+      console.error('GET /api/vendors/:id/documents failed:', err);
+      res.status(500).json({ error: 'Could not load vendor documents: ' + err.message });
+    }
+  });
+
+  app.post('/api/vendors/:id/documents', async (req, res) => {
+    const user = await requirePermission(req, res, 'vendors', 'edit');
+    if (!user) return;
+    const { filePath, fileName, docType, fileType, fileSize, notes } = req.body;
+    if (!filePath) return res.status(400).json({ error: 'A stored file path is required' });
+    if (docType && !VENDOR_DOC_TYPES.includes(docType)) {
+      return res.status(400).json({ error: `Document type must be one of: ${VENDOR_DOC_TYPES.join(', ')}` });
+    }
+    try {
+      const row = await cm('purchaseOrders:vendorDocumentAdd', {
+        vendorId: Number(req.params.id),
+        doc: {
+          docType: docType || 'Other', fileName: fileName || 'document', filePath,
+          fileType: fileType || null, fileSize: fileSize || null, notes: notes || null,
+          uploadedBy: user.name
+        }
+      });
+      await logAction(user.name, 'Vendor Document Added', `${docType || 'Other'} uploaded for vendor ${req.params.id}`);
+      res.status(201).json(mapVendorDocument(row));
+    } catch (err) {
+      const msg = cleanErr(err);
+      if (/not found/i.test(msg)) return res.status(404).json({ error: msg });
+      console.error('POST /api/vendors/:id/documents failed:', err);
+      res.status(500).json({ error: 'Could not attach vendor document: ' + msg });
+    }
+  });
+
+  app.put('/api/vendors/:id/documents/:docId', async (req, res) => {
+    const user = await requirePermission(req, res, 'vendors', 'edit');
+    if (!user) return;
+    const { filePath, fileName, docType, fileType, fileSize, notes } = req.body;
+    if (docType && !VENDOR_DOC_TYPES.includes(docType)) {
+      return res.status(400).json({ error: `Document type must be one of: ${VENDOR_DOC_TYPES.join(', ')}` });
+    }
+    try {
+      const row = await cm('purchaseOrders:vendorDocumentReplace', {
+        id: Number(req.params.docId),
+        doc: { filePath, fileName, docType, fileType, fileSize, notes, uploadedBy: user.name }
+      });
+      if (!row) return res.status(404).json({ error: 'Vendor document not found' });
+      await logAction(user.name, 'Vendor Document Replaced', `Document ${req.params.docId} on vendor ${req.params.id}`);
+      res.json(mapVendorDocument(row));
+    } catch (err) {
+      console.error('PUT /api/vendors/:id/documents/:docId failed:', err);
+      res.status(500).json({ error: 'Could not replace vendor document: ' + cleanErr(err) });
+    }
+  });
+
+  app.delete('/api/vendors/:id/documents/:docId', async (req, res) => {
+    const user = await requirePermission(req, res, 'vendors', 'delete');
+    if (!user) return;
+    try {
+      const removed = await cm('purchaseOrders:vendorDocumentRemove', { id: Number(req.params.docId) });
+      if (!removed) return res.status(404).json({ error: 'Vendor document not found' });
+      await logAction(user.name, 'Vendor Document Deleted', `${removed.doc_type} (${removed.file_name}) from vendor ${req.params.id}`);
+      res.json({ message: `Document ${removed.file_name} deleted` });
+    } catch (err) {
+      console.error('DELETE /api/vendors/:id/documents/:docId failed:', err);
+      res.status(500).json({ error: 'Could not delete vendor document: ' + err.message });
     }
   });
 
@@ -482,66 +568,17 @@ function register(app, { requirePermission, requireUser, roleCan }) {
 
   /* ------------------------------------------------------------- PO update */
 
+  // Direct edit. A PO that has been issued to a vendor is locked here — those changes must go
+  // through a Purchase Order Edit Request, which applies them via the same writer once
+  // approved (see src/requests/registry.js 'po.edit'). The lock lives in poUpdate, not in
+  // this handler, so no other caller onto a PO can quietly bypass it.
   app.patch('/api/purchase-orders/:id', async (req, res) => {
     const user = await requirePermission(req, res, 'finance', 'edit');
     if (!user) return;
     const id = parseInt(req.params.id, 10);
 
-    const problem = validateHeader(req.body, { isCreate: false });
-    if (problem) return res.status(400).json({ error: problem });
-
     try {
-      const existing = await cq('purchaseOrders:poGet', { id });
-      if (!existing) return res.status(404).json({ error: 'Purchase order not found' });
-      const po = existing.po;
-
-      // Re-snapshot the vendor only when the caller changed the vendor link.
-      let vendorSnap = null;
-      if (req.body.vendorId !== undefined || req.body.vendor !== undefined) {
-        vendorSnap = await resolveVendor(req.body);
-      }
-
-      const currency = req.body.currency || po.currency;
-      // Items may be omitted on a status-only edit; fall back to the stored lines.
-      const items = req.body.items !== undefined ? req.body.items : existing.items.map(mapItem);
-      const totals = computeTotals(items, {
-        discountType: req.body.discountType !== undefined ? req.body.discountType : po.discount_type,
-        discountValue: req.body.discountValue !== undefined ? req.body.discountValue : po.discount_value
-      });
-      const words = amountInWords(totals.grandTotal, currency);
-
-      const patch = {
-        vendor: vendorSnap ? vendorSnap.vendor : undefined,
-        vendor_id: vendorSnap ? vendorSnap.vendorId : undefined,
-        vendor_address: vendorSnap ? vendorSnap.vendorAddress : undefined,
-        vendor_gst: vendorSnap ? vendorSnap.vendorGst : undefined,
-        vendor_contact_person: vendorSnap ? vendorSnap.vendorContactPerson : undefined,
-        vendor_email: vendorSnap ? vendorSnap.vendorEmail : undefined,
-        vendor_phone: vendorSnap ? vendorSnap.vendorPhone : undefined,
-        issue_date: req.body.issueDate,
-        expected_delivery_date: req.body.expectedDeliveryDate === '' ? null : req.body.expectedDeliveryDate,
-        status: req.body.status,
-        currency: req.body.currency,
-        quotation_ref: req.body.quotationRef,
-        delivery_schedule: req.body.deliverySchedule,
-        payment_terms: req.body.paymentTerms,
-        contact_person: req.body.contactPerson,
-        delivery_location: req.body.deliveryLocation,
-        notes: req.body.notes,
-        invoice_id: req.body.invoiceId === '' ? null : req.body.invoiceId,
-        amc_id: req.body.amcId === '' ? null : req.body.amcId,
-        // Always refreshed from the recomputed totals.
-        subtotal: totals.subtotal, tax_total: totals.taxTotal, discount_type: totals.discountType,
-        discount_value: totals.discountValue, discount_amount: totals.discountAmount,
-        amount: totals.grandTotal, amount_in_words: words
-      };
-
-      const result = await cm('purchaseOrders:poUpdate', {
-        id, patch,
-        items: req.body.items !== undefined ? linesToItems(totals.lines) : undefined,
-        attachments: req.body.attachments,
-        actor: user.name
-      });
+      const result = await poUpdate.updatePurchaseOrder(id, req.body, user.name);
       await logAction(user.name, 'Purchase Order Updated', `Updated PO ${result.po.po_number}`);
       res.json({
         ...mapPo(result.po),
@@ -550,8 +587,13 @@ function register(app, { requirePermission, requireUser, roleCan }) {
         attachments: result.attachments.map(mapAttachment)
       });
     } catch (err) {
-      console.error('PATCH /api/purchase-orders failed:', err);
-      res.status(err.statusCode || 500).json({ error: 'Could not update purchase order: ' + cleanErr(err) });
+      const status = err.statusCode || 500;
+      if (status === 500) console.error('PATCH /api/purchase-orders failed:', err);
+      res.status(status).json({
+        error: status === 500 ? 'Could not update purchase order: ' + cleanErr(err) : err.message,
+        // Lets the UI offer "Raise an edit request" instead of just showing a dead error.
+        code: status === 409 ? 'PO_LOCKED_REQUIRES_REQUEST' : undefined
+      });
     }
   });
 

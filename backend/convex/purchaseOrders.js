@@ -125,9 +125,85 @@ export const vendorRemove = mutation({
       const refs = await ctx.db.query(table).filter((q) => q.eq(q.field("vendor_id"), row.id)).collect();
       for (const r of refs) await ctx.db.patch(r._id, { vendor_id: null });
     }
+    // Documents belong to the vendor, not to history — unlike the snapshot columns above,
+    // nothing else references them, so they go with it rather than dangling.
+    const docs = await ctx.db.query("vendor_documents").filter((q) => q.eq(q.field("vendor_id"), row.id)).collect();
+    for (const d of docs) await ctx.db.delete(d._id);
+
     const name = row.name;
     await ctx.db.delete(row._id);
     return { name };
+  },
+});
+
+/* -------------------------------------------------------- vendor documents */
+
+// Compliance and contract paperwork: many files per vendor, each tagged with a doc_type
+// (GST Certificate, PAN, Cancelled Cheque, …). Only metadata lives here — the bytes are in
+// the storage bucket, reached via a signed URL like every other attachment in the system.
+
+export const vendorDocumentsList = query({
+  args: { vendorId: v.any() },
+  handler: async (ctx, { vendorId }) => {
+    const rows = await ctx.db
+      .query("vendor_documents")
+      .filter((q) => q.eq(q.field("vendor_id"), vendorId))
+      .collect();
+    rows.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+    return stripAll(rows);
+  },
+});
+
+export const vendorDocumentAdd = mutation({
+  args: { vendorId: v.any(), doc: v.any() },
+  handler: async (ctx, { vendorId, doc }) => {
+    const vendor = await byId(ctx, "vendors", vendorId);
+    if (!vendor) throw new ConvexError("Vendor not found.");
+    const all = await ctx.db.query("vendor_documents").collect();
+    const _id = await ctx.db.insert("vendor_documents", {
+      id: nextId(all),
+      vendor_id: vendorId,
+      doc_type: doc.docType ?? "Other",
+      file_name: doc.fileName ?? "document",
+      file_path: doc.filePath,
+      file_type: doc.fileType ?? null,
+      file_size: doc.fileSize ?? null,
+      notes: doc.notes ?? null,
+      uploaded_by: doc.uploadedBy ?? null,
+      created_at: nowIso(),
+    });
+    return strip(await ctx.db.get(_id));
+  },
+});
+
+// Replace keeps the row (and its doc_type slot) and swaps the file underneath, so
+// "renewed GST certificate" stays one document rather than accumulating duplicates.
+export const vendorDocumentReplace = mutation({
+  args: { id: v.any(), doc: v.any() },
+  handler: async (ctx, { id, doc }) => {
+    const row = await byId(ctx, "vendor_documents", id);
+    if (!row) return null;
+    await ctx.db.patch(row._id, {
+      file_name: doc.fileName ?? row.file_name,
+      file_path: doc.filePath ?? row.file_path,
+      file_type: doc.fileType ?? row.file_type,
+      file_size: doc.fileSize ?? row.file_size,
+      doc_type: doc.docType ?? row.doc_type,
+      notes: doc.notes !== undefined ? doc.notes : row.notes,
+      uploaded_by: doc.uploadedBy ?? row.uploaded_by,
+      updated_at: nowIso(),
+    });
+    return strip(await ctx.db.get(row._id));
+  },
+});
+
+export const vendorDocumentRemove = mutation({
+  args: { id: v.any() },
+  handler: async (ctx, { id }) => {
+    const row = await byId(ctx, "vendor_documents", id);
+    if (!row) return null;
+    await ctx.db.delete(row._id);
+    return strip(row);
   },
 });
 

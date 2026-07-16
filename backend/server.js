@@ -31,6 +31,7 @@ const filesRoutes = require('./src/routes/files');
 const mastersRoutes = require('./src/routes/masters');
 const idSequencesRoutes = require('./src/routes/idSequences');
 const bulkRoutes = require('./src/routes/bulk');
+const requestsRoutes = require('./src/routes/requests');
 const createActorOf = require('./src/utils/actor');
 
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
@@ -210,6 +211,13 @@ idSequencesRoutes.register(app, { requireUser });
 // One shared import/update/delete/export/validate pipeline for every registered entity
 // (Vendors, AMC, …). See src/bulk/registry.js to add another entity.
 bulkRoutes.register(app, { requirePermission });
+
+// --- REUSABLE APPROVAL / REQUEST FRAMEWORK ---
+// One shared request → review → approve → apply pipeline for every module. The workflows it
+// serves (PO edits, asset disposal/transfer/return, master-data updates, …) are registry
+// entries in src/requests/registry.js — adding another needs no new route and no new
+// approval logic. Registered before the PO routes so nothing shadows /api/requests/*.
+requestsRoutes.register(app, { requirePermission, roleCan });
 
 // --- FILE UPLOAD API ---
 // Extracted verbatim to src/routes/files.js (upload + signed-url); the multer

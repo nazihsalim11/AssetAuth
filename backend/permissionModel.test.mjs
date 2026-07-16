@@ -25,9 +25,20 @@ test('all requested modules are present', () => {
   const required = ['dashboard', 'assets', 'allocations', 'amc', 'finance', 'documents',
     'qr', 'reports', 'emails', 'tickets', 'sla', 'knowledge', 'userDirectory', 'userManagement',
     'departments', 'branches', 'categories', 'vendors', 'notificationSettings',
-    'systemSettings', 'auditLogs'];
+    'systemSettings', 'auditLogs', 'requests'];
   for (const k of required) assert.ok(keys.includes(k), `missing module ${k}`);
-  assert.equal(model.MODULES.length, 21);
+  assert.equal(model.MODULES.length, 22);
+});
+
+test('requests is grantable and denies by default to roles with no grant', () => {
+  // The Requests module gates the shared approval engine, so a role that was never granted
+  // it must not inherit approval rights from anywhere.
+  assert.ok(model.MODULES.find((m) => m.key === 'requests').verbs.includes('approve'));
+  const m = model.buildDefaultMatrix();
+  assert.equal(model.can(m, 'Manager', 'requests', 'approve'), true);
+  assert.equal(model.can(m, 'Employee', 'requests', 'approve'), false);
+  assert.equal(model.can(m, 'Employee', 'requests', 'create'), true);
+  assert.equal(model.can(m, 'Auditor', 'requests', 'approve'), false);
 });
 
 test('every module lists only verbs from the canonical set', () => {

@@ -259,6 +259,49 @@ export const api = {
   updateVendor: (id, fields) => apiFetch(`/vendors/${id}`, { method: 'PATCH', body: JSON.stringify(fields) }),
   deleteVendor: (id) => apiFetch(`/vendors/${id}`, { method: 'DELETE' }),
 
+  // Vendor compliance/contract paperwork. Upload via uploadFile() first, then record the
+  // returned storage path here; preview/download go through getFileUrl() like every other
+  // stored file, because the bucket is private.
+  getVendorDocuments: (id) => apiFetch(`/vendors/${id}/documents`),
+  addVendorDocument: (id, doc) => apiFetch(`/vendors/${id}/documents`, { method: 'POST', body: JSON.stringify(doc) }),
+  replaceVendorDocument: (id, docId, doc) => apiFetch(`/vendors/${id}/documents/${docId}`, { method: 'PUT', body: JSON.stringify(doc) }),
+  deleteVendorDocument: (id, docId) => apiFetch(`/vendors/${id}/documents/${docId}`, { method: 'DELETE' }),
+
+  /* ------------------------------------------------------------- requests */
+  // The shared approval engine. Every one of these is request-type agnostic: the server's
+  // registry decides what a type means, so a new workflow needs no new client method.
+  getRequestOptions: () => apiFetch('/requests/options'),
+  getRequestApprovers: () => apiFetch('/requests/approvers'),
+  getRequests: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')
+    ).toString();
+    return apiFetch(`/requests${qs ? `?${qs}` : ''}`);
+  },
+  getRequestSummary: () => apiFetch('/requests/summary'),
+  getRequest: (id) => apiFetch(`/requests/${id}`),
+  getRequestComparison: (id) => apiFetch(`/requests/${id}/comparison`),
+  getRequestHistory: (id) => apiFetch(`/requests/${id}/history`),
+  // Current values of the record a request would change, for prefilling the create form.
+  getRequestRecord: (type, recordId) => apiFetch(`/requests/record/${type}/${encodeURIComponent(recordId)}`),
+  createRequest: (payload) => apiFetch('/requests', { method: 'POST', body: JSON.stringify(payload) }),
+  submitRequest: (id) => apiFetch(`/requests/${id}/submit`, { method: 'POST' }),
+  approveRequest: (id, payload = {}) => apiFetch(`/requests/${id}/approve`, { method: 'POST', body: JSON.stringify(payload) }),
+  rejectRequest: (id, payload = {}) => apiFetch(`/requests/${id}/reject`, { method: 'POST', body: JSON.stringify(payload) }),
+  requestMoreInfo: (id, payload = {}) => apiFetch(`/requests/${id}/request-info`, { method: 'POST', body: JSON.stringify(payload) }),
+  respondToRequest: (id, payload = {}) => apiFetch(`/requests/${id}/respond`, { method: 'POST', body: JSON.stringify(payload) }),
+  reassignRequest: (id, payload = {}) => apiFetch(`/requests/${id}/reassign`, { method: 'POST', body: JSON.stringify(payload) }),
+  cancelRequest: (id, payload = {}) => apiFetch(`/requests/${id}/cancel`, { method: 'POST', body: JSON.stringify(payload) }),
+  // Retries the apply on a request that was approved but whose write failed.
+  applyRequest: (id) => apiFetch(`/requests/${id}/apply`, { method: 'POST', body: JSON.stringify({}) }),
+  deleteRequest: (id) => apiFetch(`/requests/${id}`, { method: 'DELETE' }),
+  addRequestComment: (id, body) => apiFetch(`/requests/${id}/comments`, { method: 'POST', body: JSON.stringify({ body }) }),
+  addRequestAttachment: (id, doc) => apiFetch(`/requests/${id}/attachments`, { method: 'POST', body: JSON.stringify(doc) }),
+  replaceRequestAttachment: (id, attachmentId, doc) => apiFetch(`/requests/${id}/attachments/${attachmentId}`, { method: 'PUT', body: JSON.stringify(doc) }),
+  deleteRequestAttachment: (id, attachmentId) => apiFetch(`/requests/${id}/attachments/${attachmentId}`, { method: 'DELETE' }),
+  // Bulk approve/reject/cancel. Reports per-id results — one failure does not sink the rest.
+  bulkRequestAction: (action, payload) => apiFetch(`/requests/bulk/${action}`, { method: 'POST', body: JSON.stringify(payload) }),
+
   // Company letterhead, authorised signature and PO-number rule.
   getPoSettings: () => apiFetch('/po-settings'),
   updatePoSettings: (fields) => apiFetch('/po-settings', { method: 'PATCH', body: JSON.stringify(fields) }),

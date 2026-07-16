@@ -20,6 +20,7 @@ const { cq, cm } = require('../../convexApi');
 const REGISTRY = {
   employee: { table: 'users', field: 'employee_id', prefix: 'EMP', padding: 4, label: 'Employee' },
   asset:    { table: 'assets', field: 'id', prefix: 'AST', padding: 4, label: 'Asset' },
+  request:  { table: 'requests', field: 'id', prefix: 'REQ', padding: 5, label: 'Request' },
 };
 
 function descriptorFor(entity) {

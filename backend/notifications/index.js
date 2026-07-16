@@ -204,6 +204,21 @@ function resolveRecipients(eventType, ctx, users) {
     case 'system.bulk_import_completed':
       return uniqueById(admins(users));
 
+    /* ---------------------------------------------------------- requests */
+    // An approval queue has a named audience: the people the request is actually about.
+    // The engine passes them as ctx.explicitRecipients (requester + the approvers on the
+    // active level); falling through to admins() here would page every administrator about
+    // every request in the system, which is how a notification framework gets muted.
+    case 'request.submitted':
+    case 'request.approval_requested':
+    case 'request.assigned':
+    case 'request.approved':
+    case 'request.rejected':
+    case 'request.cancelled':
+    case 'request.info_requested':
+    case 'request.comment_added':
+      return uniqueById(byIds(users, ctx.explicitRecipients || []));
+
     default:
       return uniqueById(admins(users));
   }

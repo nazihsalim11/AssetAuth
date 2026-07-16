@@ -29,6 +29,10 @@ const VERB_LABELS = {
 // nav: the frontend activeTab this module gates, or null if it is not a nav page.
 const MODULES = [
   { key: 'dashboard',            label: 'Dashboard',              nav: 'dashboard',  verbs: ['view'] },
+  // Requests is the approval engine every module routes through. `approve` covers reject and
+  // request-more-info too — they are the same act of deciding, and splitting them would let a
+  // role approve but not reject, which is not a coherent reviewer. `manage` is reassignment.
+  { key: 'requests',             label: 'Requests & Approvals',   nav: 'requests',   verbs: ['view', 'create', 'edit', 'delete', 'approve', 'export', 'manage'] },
   { key: 'assets',               label: 'Asset Directory',        nav: 'assets',     verbs: ['view', 'create', 'edit', 'delete', 'export', 'manage'] },
   { key: 'allocations',          label: 'Allocations & Movements', nav: 'allocations', verbs: ['view', 'create', 'edit', 'delete', 'approve', 'export'] },
   { key: 'amc',                  label: 'AMC Contracts',          nav: 'amc',        verbs: ['view', 'create', 'edit', 'delete', 'export'] },
@@ -73,7 +77,7 @@ const DEFAULT_GRANTS = {
   'Admin Team': {
     dashboard: 'all', assets: 'all', allocations: 'all', amc: 'all', finance: 'all',
     documents: 'all', qr: 'all', reports: 'all', emails: 'all', tickets: 'all',
-    sla: 'all', knowledge: 'all', userDirectory: 'all',
+    sla: 'all', knowledge: 'all', userDirectory: 'all', requests: 'all',
     userManagement: ['view', 'create', 'edit'],           // not manage (permission editing)
     departments: 'all', branches: 'all', categories: 'all', vendors: 'all',
     notificationSettings: 'all', auditLogs: ['view', 'export']
@@ -83,40 +87,51 @@ const DEFAULT_GRANTS = {
     dashboard: 'all', assets: 'all', allocations: 'all', amc: 'all',
     documents: ['view', 'create', 'edit'], qr: 'all', reports: ['view', 'export'],
     tickets: 'all', sla: 'all', knowledge: ['view', 'create', 'edit'],
-    userDirectory: ['view'], categories: 'all', vendors: 'all'
+    userDirectory: ['view'], categories: 'all', vendors: 'all',
+    requests: ['view', 'create', 'edit', 'approve', 'export']
   },
   'HR Team': {
     dashboard: 'all', userDirectory: 'all',
     userManagement: ['view', 'create', 'edit'],
     departments: 'all', documents: ['view'], knowledge: ['view'],
-    reports: ['view', 'export'], tickets: ['view', 'create']
+    reports: ['view', 'export'], tickets: ['view', 'create'],
+    requests: ['view', 'create', 'edit']
   },
   'Manager': {
     dashboard: 'all', assets: ['view'], allocations: ['view', 'approve'],
     amc: ['view'], finance: ['view', 'approve'], documents: ['view'],
     reports: ['view', 'export'], tickets: ['view', 'edit', 'approve'],
-    sla: ['view'], knowledge: ['view'], userDirectory: ['view']
+    sla: ['view'], knowledge: ['view'], userDirectory: ['view'],
+    // The approver role: decides and reassigns, but does not delete the audit trail.
+    requests: ['view', 'create', 'edit', 'approve', 'export', 'manage']
   },
   'Employee': {
     dashboard: 'all', tickets: ['view', 'create'], knowledge: ['view'],
-    documents: ['view']
+    documents: ['view'],
+    // Employees raise requests (an asset return, a detail correction) and track their own.
+    // The route scopes a view-without-approve role to its own + assigned requests.
+    requests: ['view', 'create']
   },
   // Legacy roles, migrated to a sensible matrix so existing users keep working.
   'Facility Admin': {
     dashboard: 'all', assets: 'all', allocations: 'all', amc: 'all',
     documents: ['view', 'create', 'edit'], qr: 'all', reports: ['view', 'export'],
-    tickets: 'all', knowledge: ['view'], userDirectory: ['view']
+    tickets: 'all', knowledge: ['view'], userDirectory: ['view'],
+    requests: ['view', 'create', 'edit', 'approve']
   },
   'Finance Team': {
     dashboard: 'all', finance: 'all', amc: ['view'], reports: ['view', 'export'],
-    documents: ['view'], assets: ['view'], auditLogs: ['view', 'export']
+    documents: ['view'], assets: ['view'], auditLogs: ['view', 'export'],
+    // Purchase order edit requests land here, so this role decides them.
+    requests: ['view', 'create', 'edit', 'approve', 'export']
   },
   'Auditor': {
     // Read-only everywhere it can see, plus export. No create/edit/delete/approve/manage.
     dashboard: 'all', assets: ['view', 'export'], allocations: ['view', 'export'],
     amc: ['view', 'export'], finance: ['view', 'export'], documents: ['view', 'export'],
     reports: ['view', 'export'], tickets: ['view', 'export'], knowledge: ['view'],
-    userDirectory: ['view', 'export'], auditLogs: ['view', 'export']
+    userDirectory: ['view', 'export'], auditLogs: ['view', 'export'],
+    requests: ['view', 'export']
   }
 };
 

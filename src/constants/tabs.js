@@ -4,6 +4,6 @@
 // (which is exactly how the SLA tab regressed: it was missing from the handler's
 // copy of this list).
 export const VALID_TABS = [
-  'dashboard', 'assets', 'allocations', 'amc', 'finance', 'documents',
+  'dashboard', 'assets', 'allocations', 'amc', 'finance', 'requests', 'documents',
   'qr_lookup', 'reports', 'emails', 'users', 'tickets', 'sla', 'knowledge_base'
 ];
