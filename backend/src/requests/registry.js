@@ -16,7 +16,10 @@
  *   idField        field identifying the record within that table
  *   idType         'number' | 'string' — how to coerce the record id off the wire
  *   labelField     field used to name the record in lists, notifications and audit lines
- *   kind           'edit' (proposes field changes) | 'action' (proposes a state change)
+ *   kind           'edit'   proposes field changes on an existing record
+ *                  'action' proposes a state change on an existing record
+ *                  'new'    proposes a *new* thing; there is no target record at all. The
+ *                           request row itself is the document (see 'purchase.request').
  *   fields         camelKey -> { label, column, type } — the whitelist of proposable fields.
  *                  `column` is the snake_case Convex field the default applier writes.
  *   load           optional (id) => camelCase record, when the table's shape needs mapping
@@ -25,12 +28,24 @@
  *   levels         default number of approval levels
  *   fixedChanges   for 'action' types: changes the type always applies, on top of proposed
  *
+ * Optional hooks, all generic — any type may use them, none of them is about one module:
+ *   normalize(payload, user)   -> payload   derive server-owned values before validation and
+ *                                           diffing (totals, snapshots). Never trust the client
+ *                                           for a number the server can compute itself.
+ *   validate(payload, user)    -> throws    reject a bad proposal at submit time
+ *   describe(payload)          -> string    the record label for a 'new' request
+ *   matchContext(payload,user) -> object    the facts the approval-rule engine matches on
+ *                                           (department, amount, priority, categories, …)
+ *   displayStatus(row)         -> string    a type's own vocabulary over the engine's status,
+ *                                           e.g. a converted purchase request
+ *
  * `type` drives the diff's comparison rules only (see requests/diff.js), not validation of
  * the value — the target module's own writer stays the authority on what it will accept.
  */
 
 const { cq } = require('../../convexApi');
 const poUpdate = require('../services/poUpdate');
+const purchaseRequest = require('./purchaseRequest');
 
 const f = (label, column, type = 'string') => ({ label, column, type });
 
@@ -57,6 +72,41 @@ function coerceId(descriptor, id) {
 /* ------------------------------------------------------------- descriptors */
 
 const TYPES = {
+  // The first 'new' type: a purchase request has no target record — the request *is* the
+  // document. It reaches the engine through the same lifecycle, ladder, diff, audit trail,
+  // attachments and notifications as every edit request; the only thing that is its own is
+  // the shape of its payload, which lives in ./purchaseRequest.js.
+  'purchase.request': {
+    key: 'purchase.request',
+    label: 'Purchase Request',
+    module: 'purchaseRequests',
+    kind: 'new',
+    // Default depth when no approval rule matches. The configurable ladders live in the
+    // approval-rule engine (./rules.js) — this is only the floor.
+    levels: 2,
+    fields: {
+      department: f('Department', 'department'),
+      requiredByDate: f('Required By', 'required_by_date', 'date'),
+      currency: f('Currency', 'currency'),
+      items: f('Item Details', 'items', 'json'),
+      estimatedTotal: f('Total Estimated Cost', 'estimated_total', 'number'),
+      quotations: f('Vendor Quotations', 'quotations', 'json'),
+      preferredVendorId: f('Preferred Vendor', 'preferred_vendor_id', 'number'),
+      preferredVendorName: f('Preferred Vendor Name', 'preferred_vendor_name'),
+    },
+    // The paperwork this type expects. Generic: any type may declare a list, and the shared
+    // attachment control offers it — no per-module upload screen.
+    docTypes: [
+      'Vendor Quotation', 'Specification', 'Image', 'Supporting Document',
+      'Technical Evaluation', 'Approval Document', 'Other',
+    ],
+    normalize: purchaseRequest.normalize,
+    validate: purchaseRequest.validate,
+    describe: purchaseRequest.describe,
+    matchContext: purchaseRequest.matchContext,
+    displayStatus: purchaseRequest.displayStatus,
+  },
+
   'po.edit': {
     key: 'po.edit',
     label: 'Purchase Order Edit Request',
@@ -336,9 +386,24 @@ function descriptorFor(requestType) {
 /** Every field a request of this type may carry — proposable plus type-fixed. */
 const allFields = (descriptor) => ({ ...descriptor.fields, ...(descriptor.fixedFields || {}) });
 
+/** A type with no target record: the request row is the document it proposes. */
+const isNew = (descriptor) => descriptor.kind === 'new';
+
+/**
+ * Run a type's payload hooks: derive the server-owned values, then reject a bad proposal.
+ * Both are optional — a type that declares neither behaves exactly as before.
+ */
+async function preparePayload(requestType, payload, user, ctx = {}) {
+  const descriptor = descriptorFor(requestType);
+  const normalized = descriptor.normalize ? await descriptor.normalize(payload, user) : payload;
+  if (descriptor.validate) await descriptor.validate(normalized, user, ctx);
+  return normalized;
+}
+
 /** Load the target record's current values, keyed by the descriptor's camel field names. */
 async function loadRecord(requestType, recordId) {
   const descriptor = descriptorFor(requestType);
+  if (isNew(descriptor)) return null;
   const record = descriptor.load
     ? await descriptor.load(recordId)
     : await loadByColumns({ ...descriptor, fields: allFields(descriptor) }, recordId);
@@ -354,6 +419,9 @@ async function loadRecord(requestType, recordId) {
 async function applyChanges(requestType, record, changes, ctx) {
   const descriptor = descriptorFor(requestType);
   if (descriptor.apply) return descriptor.apply(record, changes, ctx);
+  // A 'new' type has no record to patch. Approval *is* the outcome — what happens next (a
+  // purchase order, say) is a separate, separately-permissioned action, not a silent write.
+  if (isNew(descriptor)) return;
 
   const { toColumnPatch } = require('./diff');
   const patch = toColumnPatch(changes, allFields(descriptor));
@@ -376,6 +444,9 @@ const catalog = () =>
     module: d.module,
     kind: d.kind,
     levels: d.levels,
+    // A 'new' type has no record to look up, so the generic create form must not ask for one.
+    needsRecord: !isNew(d),
+    docTypes: d.docTypes || null,
     fields: Object.entries(d.fields).map(([key, spec]) => ({
       key,
       label: spec.label,
@@ -383,4 +454,7 @@ const catalog = () =>
     })),
   }));
 
-module.exports = { TYPES, descriptorFor, loadRecord, applyChanges, allFields, coerceId, catalog };
+module.exports = {
+  TYPES, descriptorFor, loadRecord, applyChanges, allFields, coerceId, catalog,
+  isNew, preparePayload,
+};

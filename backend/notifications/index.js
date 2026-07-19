@@ -217,6 +217,7 @@ function resolveRecipients(eventType, ctx, users) {
     case 'request.cancelled':
     case 'request.info_requested':
     case 'request.comment_added':
+    case 'request.converted':
       return uniqueById(byIds(users, ctx.explicitRecipients || []));
 
     default:

@@ -18,6 +18,7 @@
 
 const engine = require('../requests/engine');
 const registry = require('../requests/registry');
+const rules = require('../requests/rules');
 const { cq } = require('../../convexApi');
 
 const send = (res, err, fallback) => {
@@ -35,18 +36,42 @@ const idsOf = (request) => [
 // on its own — requirePermission authenticates as its first step.
 function register(app, { requirePermission, roleCan }) {
   /**
-   * Default approvers when the requester does not name any: every active user whose current
-   * role can approve requests, one per level up to the type's configured depth.
+   * Who approves a request when the requester does not name anyone.
+   *
+   * First ask the configurable approval-rule engine: a rule matching this request's type,
+   * department, cost band, priority and category produces the ladder — single, multi-level,
+   * sequential or parallel — from the database rather than from code.
+   *
+   * Only when no rule matches does the original fallback apply: eligible approvers, one per
+   * level up to the type's declared depth. That fallback is what keeps every existing request
+   * type working with no rules configured at all.
    *
    * Deliberately excludes the requester — self-approval would make the whole module theatre.
    */
-  async function defaultApprovers(descriptor, requester) {
+  async function defaultApprovers(descriptor, requester, context = {}) {
     const users = await cq('notifications:usersActive', {});
+
+    // The rule engine only ever picks from people whose role can actually approve. A rule
+    // naming a role that lost its approval rights must fail loudly rather than build a ladder
+    // of people the engine would then refuse a decision from.
     const eligible = [];
     for (const u of users) {
       if (String(u.id) === String(requester.id)) continue;
       if (await roleCan(u, 'requests', 'approve')) eligible.push(u);
     }
+
+    const configured = await rules.resolve(context, { users: eligible, requester });
+    if (configured.approvers.length) return configured.approvers;
+    if (configured.rule) {
+      throw Object.assign(
+        new Error(
+          `Approval rule "${configured.rule.name}" applies to this request but names nobody who can approve it. ` +
+          `Fix the rule, or pick an approver explicitly.`
+        ),
+        { statusCode: 400 }
+      );
+    }
+
     if (!eligible.length) return [];
 
     // One approver per level. With fewer eligible people than levels the ladder simply gets
@@ -87,6 +112,50 @@ function register(app, { requirePermission, roleCan }) {
       priorities: engine.PRIORITIES,
       transitions: engine.TRANSITIONS,
     });
+  });
+
+  /* ------------------------------------------------------- approval rules */
+
+  // The configurable ladders. Reading them is part of understanding why a request went where
+  // it did, so `view` is enough; changing who approves what is `manage`.
+  app.get('/api/requests/rules', async (req, res) => {
+    const user = await requirePermission(req, res, 'requests', 'view');
+    if (!user) return;
+    try {
+      res.json(await rules.list());
+    } catch (err) {
+      send(res, err, 'Could not load approval rules');
+    }
+  });
+
+  const ruleWrite = (method, path, run) =>
+    app[method](`/api/requests/rules${path}`, async (req, res) => {
+      const user = await requirePermission(req, res, 'requests', 'manage');
+      if (!user) return;
+      try {
+        res.json(await run(req, user));
+      } catch (err) {
+        send(res, err, 'Could not save the approval rule');
+      }
+    });
+
+  ruleWrite('post', '', (req, user) => rules.create(req.body || {}, user));
+  ruleWrite('put', '/:id', (req) => rules.update(req.params.id, req.body || {}));
+  ruleWrite('delete', '/:id', (req) => rules.remove(req.params.id));
+
+  /**
+   * Which rule *would* govern a request with these facts. The admin screen uses this to show
+   * an author the effect of what they just wrote before a real request depends on it.
+   */
+  app.post('/api/requests/rules/preview', async (req, res) => {
+    const user = await requirePermission(req, res, 'requests', 'manage');
+    if (!user) return;
+    try {
+      const rule = await rules.match(req.body || {});
+      res.json({ rule });
+    } catch (err) {
+      send(res, err, 'Could not evaluate the approval rules');
+    }
   });
 
   /** Who can be picked as an approver. Used by the create form and the reassign dialog. */
@@ -217,12 +286,19 @@ function register(app, { requirePermission, roleCan }) {
     if (!user) return;
     try {
       const descriptor = registry.descriptorFor(req.body.requestType);
-      if (!(await roleCan(user, descriptor.module, 'view'))) {
+      // Editing an existing record through a request needs view on it (the diff would
+      // otherwise leak values the role cannot see). A 'new' type creates a document in that
+      // module instead, so it needs `create` there — view on Purchase Requests must not be
+      // enough to raise one.
+      const verb = registry.isNew(descriptor) ? 'create' : 'view';
+      if (!(await roleCan(user, descriptor.module, verb))) {
         return res.status(403).json({
           error: `Your role is not permitted to raise requests against ${descriptor.label.replace(' Request', '')} records.`,
         });
       }
-      const request = await engine.create(req.body, user);
+      const request = await engine.create(req.body, user, {
+        canManage: await roleCan(user, descriptor.module, 'manage'),
+      });
       res.status(201).json(request);
     } catch (err) {
       send(res, err, 'Could not create the request');
@@ -313,6 +389,24 @@ function register(app, { requirePermission, roleCan }) {
       res.json(await engine.submit(req.params.id, user));
     } catch (err) {
       send(res, err, 'Could not submit the request');
+    }
+  });
+
+  // Revise a request that has not been approved yet — fix a typo in a draft, or answer an
+  // approver's "these quantities look wrong". The engine enforces requester-only and
+  // Draft/Under-Review-only; this only supplies the permission gate.
+  app.patch('/api/requests/:id', async (req, res) => {
+    const user = await requirePermission(req, res, 'requests', 'edit');
+    if (!user) return;
+    try {
+      const existing = await engine.get(req.params.id);
+      if (!existing) return res.status(404).json({ error: 'Request not found' });
+      const descriptor = registry.descriptorFor(existing.requestType);
+      res.json(await engine.updateProposal(req.params.id, user, req.body || {}, {
+        canManage: await roleCan(user, descriptor.module, 'manage'),
+      }));
+    } catch (err) {
+      send(res, err, 'Could not revise the request');
     }
   });
 

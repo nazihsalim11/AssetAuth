@@ -62,9 +62,24 @@ const err = (message, statusCode) => Object.assign(new Error(message), { statusC
 /* ========================================================== approval engine */
 
 /**
+ * How a level with more than one approver on it clears:
+ *   'all'  every approver must sign — a two-person level is a two-signature level
+ *   'any'  the first approval carries the level, the rest are no longer needed (quorum of one)
+ * A single-approver level behaves identically either way.
+ */
+const LEVEL_MODES = ['all', 'any'];
+const DEFAULT_LEVEL_MODE = 'all';
+
+const modeOf = (a) => (LEVEL_MODES.includes(a?.mode) ? a.mode : DEFAULT_LEVEL_MODE);
+
+/**
  * Normalise a submitted approver list into the stored ladder. Levels are renumbered 1..n in
  * the order given, so a caller cannot create a ladder with a gap (level 1 then level 3) that
  * would strand the request on a level nobody is assigned to.
+ *
+ * The mode is stored on every row of a level rather than beside the ladder, so a reassignment
+ * or a partial read of the ladder can never separate a level from the rule that clears it.
+ * Mixed modes within one level would be meaningless, so the first row's mode wins.
  */
 function buildLadder(approvers = []) {
   const byLevel = new Map();
@@ -76,11 +91,14 @@ function buildLadder(approvers = []) {
   const ordered = [...byLevel.keys()].sort((x, y) => x - y);
   const out = [];
   ordered.forEach((original, index) => {
-    for (const a of byLevel.get(original)) {
+    const rows = byLevel.get(original);
+    const mode = modeOf(rows[0]);
+    for (const a of rows) {
       out.push({
         level: index + 1,
         user_id: String(a.userId ?? a.user_id),
         user_name: a.userName ?? a.user_name ?? null,
+        mode,
         status: 'Pending',
         acted_at: null,
         comment: null,
@@ -103,15 +121,20 @@ const isCurrentApprover = (request, userId) =>
 /**
  * Record one approver's decision and work out what it means for the request.
  *
- * A level clears only when every approver on it has approved — a two-person level is a
- * two-signature level, not a race. One rejection anywhere ends the request immediately;
- * that is deliberate, a rejection is a veto, not a vote.
+ * An 'all' level clears only when every approver on it has approved — a two-person level is a
+ * two-signature level, not a race. An 'any' level clears on the first approval, and the
+ * approvers who did not get there are marked Not required rather than left Pending: a slot
+ * nobody owes a decision on must not keep sitting in their queue.
+ *
+ * One rejection anywhere ends the request immediately, in either mode. That is deliberate — a
+ * rejection is a veto, not a vote. An 'any' level where one person can approve and another can
+ * veto is not a quorum, it is a trap, and the veto is the safer half of the pair to honour.
  *
  * Pure: takes the ladder, returns the new ladder plus the resulting level/outcome.
  */
 function decide(ladder, level, userId, decision, comment) {
   const at = nowIso();
-  const next = ladder.map((a) =>
+  let next = ladder.map((a) =>
     Number(a.level) === Number(level) && String(a.user_id) === String(userId) && a.status === 'Pending'
       ? { ...a, status: decision, acted_at: at, comment: comment ?? null }
       : a
@@ -119,8 +142,21 @@ function decide(ladder, level, userId, decision, comment) {
 
   if (decision === 'Rejected') return { ladder: next, level, outcome: 'rejected' };
 
-  const levelCleared = approversAt(next, level).every((a) => a.status === 'Approved');
+  const at_level = approversAt(next, level);
+  const mode = modeOf(at_level[0]);
+  const levelCleared = mode === 'any'
+    ? at_level.some((a) => a.status === 'Approved')
+    : at_level.every((a) => a.status === 'Approved');
+
   if (!levelCleared) return { ladder: next, level, outcome: 'pending' };
+
+  if (mode === 'any') {
+    next = next.map((a) =>
+      Number(a.level) === Number(level) && a.status === 'Pending'
+        ? { ...a, status: 'Not required', acted_at: at }
+        : a
+    );
+  }
 
   const total = levelsIn(next);
   if (Number(level) >= total) return { ladder: next, level, outcome: 'approved' };
@@ -168,6 +204,10 @@ const mapRequest = (r) => ({
   id: r.id,
   requestType: r.request_type,
   requestTypeLabel: registry.TYPES[r.request_type]?.label || r.request_type,
+  // A type may report its own vocabulary over the engine's status — a purchase request that
+  // became a purchase order, say. `status` stays the engine's, so nothing that reasons about
+  // the lifecycle has to learn a type's words for it.
+  displayStatus: registry.TYPES[r.request_type]?.displayStatus?.(r) || r.status,
   module: r.module,
   recordId: r.record_id,
   recordLabel: r.record_label,
@@ -178,6 +218,7 @@ const mapRequest = (r) => ({
     level: a.level,
     userId: a.user_id,
     userName: a.user_name,
+    mode: a.mode || DEFAULT_LEVEL_MODE,
     status: a.status,
     actedAt: a.acted_at,
     comment: a.comment,
@@ -197,6 +238,10 @@ const mapRequest = (r) => ({
   createdAt: r.created_at,
   updatedAt: r.updated_at,
   completedAt: r.completed_at,
+  // Post-approval outcomes. Generic fields: any type that turns an approved request into
+  // another record links it here rather than growing a table of its own.
+  convertedTo: r.converted_po_id ? { module: 'finance', kind: 'Purchase Order', id: r.converted_po_id, label: r.converted_po_number } : null,
+  closedAt: r.closed_at || null,
 });
 
 /* ================================================================ workflow */
@@ -254,46 +299,73 @@ async function list(filters = {}) {
  * Create a request. `submit: false` leaves it in Draft (nobody is notified, nothing is
  * assigned); the default submits it straight into the approval ladder.
  */
-async function create(input, user) {
+async function create(input, user, ctx = {}) {
   const descriptor = registry.descriptorFor(input.requestType);
+  const isNew = registry.isNew(descriptor);
 
   if (input.priority && !PRIORITIES.includes(input.priority)) {
     throw err(`Priority must be one of: ${PRIORITIES.join(', ')}`, 400);
   }
-  if (!input.recordId && input.recordId !== 0) throw err('A target record is required', 400);
+  if (!isNew && !input.recordId && input.recordId !== 0) throw err('A target record is required', 400);
   if (!input.reason || !String(input.reason).trim()) throw err('A reason is required', 400);
 
-  const record = await registry.loadRecord(input.requestType, input.recordId);
-  if (!record) throw err(`The ${descriptor.label} target record no longer exists`, 404);
+  // A 'new' type proposes a document rather than an edit, so there is nothing to load and
+  // nothing to collide with — two people may raise two purchase requests the same morning.
+  let record = null;
+  if (!isNew) {
+    record = await registry.loadRecord(input.requestType, input.recordId);
+    if (!record) throw err(`The ${descriptor.label} target record no longer exists`, 404);
 
-  // A second open request against the same record would mean two reviewers approving
-  // conflicting edits to the same fields, each diffed against a `before` the other is about
-  // to invalidate. One at a time.
-  const open = await cq('requests:openForRecord', {
-    module: descriptor.module,
-    recordId: String(input.recordId),
-    requestType: input.requestType,
-  });
-  if (open.length) {
-    throw err(
-      `${open[0].id} is already open against ${record.__label}. Resolve it before raising another.`,
-      409
-    );
+    // A second open request against the same record would mean two reviewers approving
+    // conflicting edits to the same fields, each diffed against a `before` the other is about
+    // to invalidate. One at a time.
+    const open = await cq('requests:openForRecord', {
+      module: descriptor.module,
+      recordId: String(input.recordId),
+      requestType: input.requestType,
+    });
+    if (open.length) {
+      throw err(
+        `${open[0].id} is already open against ${record.__label}. Resolve it before raising another.`,
+        409
+      );
+    }
   }
 
   // Whitelist the proposal against the type's declared fields, then fold in whatever the
   // type always does (a disposal request sets status=Disposed; the requester never says so).
-  const proposed = {
-    ...diff.pickAllowed(input.proposedChanges || {}, descriptor.fields),
-    ...(descriptor.fixedChanges || {}),
-  };
+  // `preparePayload` then derives the server-owned values and validates — in that order, so
+  // a client-supplied total can never survive into what the approval rules match on.
+  const proposed = await registry.preparePayload(
+    input.requestType,
+    {
+      ...diff.pickAllowed(input.proposedChanges || {}, descriptor.fields),
+      ...(descriptor.fixedChanges || {}),
+    },
+    user,
+    ctx
+  );
+
   const changes = diff.diffFields(record, proposed, registry.allFields(descriptor));
   if (!changes.length) {
-    throw err('This request would not change anything on the record', 400);
+    throw err(
+      isNew ? 'This request has nothing in it' : 'This request would not change anything on the record',
+      400
+    );
   }
 
+  const label = isNew
+    ? (descriptor.describe ? descriptor.describe(proposed) : descriptor.label)
+    : record.__label;
+
   const ladder = buildLadder(
-    input.approvers?.length ? input.approvers : await resolveDefaultApprovers(descriptor, user)
+    input.approvers?.length
+      ? input.approvers
+      : await resolveDefaultApprovers(descriptor, user, {
+        requestType: input.requestType,
+        priority: input.priority || 'Medium',
+        ...(descriptor.matchContext ? descriptor.matchContext(proposed, user) : {}),
+      })
   );
   if (!ladder.length) {
     throw err(
@@ -310,8 +382,8 @@ async function create(input, user) {
       id: nextId,
       request_type: input.requestType,
       module: descriptor.module,
-      record_id: String(input.recordId),
-      record_label: record.__label,
+      record_id: isNew ? null : String(input.recordId),
+      record_label: label,
       requested_by: user.id != null ? String(user.id) : null,
       requested_by_name: user.name,
       requested_on: nowIso(),
@@ -365,6 +437,72 @@ async function submit(id, user) {
   await notify.submitted(request);
   await notify.approvalRequested(request, approversAt(row.approvers || [], 1));
   return request;
+}
+
+/**
+ * Revise what a request proposes, before anyone has approved it.
+ *
+ * Only the requester, and only while the request is still Draft or has been sent back for
+ * more information — once a level has signed, the thing they signed must not change under
+ * them. The revision is re-normalised and re-validated through the type's own hooks, so an
+ * edit cannot smuggle in a payload the create path would have refused, and it is recorded in
+ * the audit trail with the resulting diff attached.
+ */
+async function updateProposal(id, user, input = {}, ctx = {}) {
+  const row = await rawOrThrow(id);
+  if (String(row.requested_by) !== String(user.id)) {
+    throw err('Only the requester can revise this request', 403);
+  }
+  if (!['Draft', 'Under Review'].includes(row.status)) {
+    throw err(`A ${row.status} request can no longer be revised`, 400);
+  }
+
+  const descriptor = registry.descriptorFor(row.request_type);
+  const record = registry.isNew(descriptor)
+    ? null
+    : await registry.loadRecord(row.request_type, row.record_id);
+
+  const proposed = await registry.preparePayload(
+    row.request_type,
+    {
+      ...(row.proposed_changes || {}),
+      ...diff.pickAllowed(input.proposedChanges || {}, descriptor.fields),
+      ...(descriptor.fixedChanges || {}),
+    },
+    user,
+    ctx
+  );
+  const changes = diff.diffFields(record, proposed, registry.allFields(descriptor));
+  if (!changes.length) throw err('A revised request still has to propose something', 400);
+
+  if (input.priority && !PRIORITIES.includes(input.priority)) {
+    throw err(`Priority must be one of: ${PRIORITIES.join(', ')}`, 400);
+  }
+
+  await cm('requests:act', {
+    id,
+    expectedUpdatedAt: row.updated_at,
+    patch: {
+      proposed_changes: proposed,
+      changes_preview: changes,
+      record_label: registry.isNew(descriptor) && descriptor.describe
+        ? descriptor.describe(proposed)
+        : row.record_label,
+      ...(input.reason ? { reason: String(input.reason).trim() } : {}),
+      ...(input.description !== undefined ? { description: input.description || null } : {}),
+      ...(input.priority ? { priority: input.priority } : {}),
+      ...(input.dueDate !== undefined ? { due_date: input.dueDate || null } : {}),
+    },
+    history: {
+      action: 'Request Revised',
+      detail: diff.summarize(changes),
+      actor: String(user.id),
+      actorName: user.name,
+      changes,
+    },
+  });
+
+  return get(id);
 }
 
 /**
@@ -445,9 +583,13 @@ async function complete(id, user) {
   if (row.status !== 'Approved') throw err(`A ${row.status} request cannot be applied`, 400);
 
   const descriptor = registry.descriptorFor(row.request_type);
-  const record = await registry.loadRecord(row.request_type, row.record_id);
-  if (!record) throw err('The target record no longer exists — nothing to apply', 409);
+  const isNew = registry.isNew(descriptor);
 
+  const record = isNew ? null : await registry.loadRecord(row.request_type, row.record_id);
+  if (!isNew && !record) throw err('The target record no longer exists — nothing to apply', 409);
+
+  // For a 'new' type there is nothing to re-diff against: the approved content *is* the
+  // proposal, so it is recorded verbatim rather than compared to a record that never existed.
   const changes = diff.diffFields(record, row.proposed_changes || {}, registry.allFields(descriptor));
 
   try {
@@ -644,6 +786,65 @@ async function cancel(id, user, { comment } = {}) {
   return request;
 }
 
+/* -------------------------------------------------------- post-approval outcomes */
+
+/**
+ * Record that an approved request produced something — a purchase order, a contract, whatever
+ * a future type converts into. Generic on purpose: the caller supplies the patch and the audit
+ * line, this enforces the one rule that matters, which is that only a fully approved request
+ * can have produced anything, and that it can only produce it once.
+ *
+ * The write goes through the same compare-and-set as every other state change, so two people
+ * clicking Convert at the same instant cannot create two purchase orders from one request.
+ */
+async function linkOutcome(id, user, { patch, action, detail, guard, outcomeLabel }) {
+  const row = await rawOrThrow(id);
+  if (row.status !== 'Completed') {
+    throw err(`A ${row.status} request has not been approved — nothing can be raised from it yet`, 400);
+  }
+  if (row.closed_at) throw err('This request is closed', 400);
+  const already = guard?.(row);
+  if (already) throw err(already, 409);
+
+  await cm('requests:act', {
+    id,
+    expectedUpdatedAt: row.updated_at,
+    patch,
+    history: {
+      action,
+      detail,
+      actor: user.id != null ? String(user.id) : null,
+      actorName: user.name,
+    },
+  });
+
+  const request = await get(id);
+  await notify.converted(request, outcomeLabel || action, detail);
+  return request;
+}
+
+/** Close a finished request. Bookkeeping, not a decision — a closed request is read-only. */
+async function close(id, user, { comment } = {}) {
+  const row = await rawOrThrow(id);
+  if (!TERMINAL_STATUSES.includes(row.status)) {
+    throw err(`A ${row.status} request is still in flight — cancel it instead of closing it`, 400);
+  }
+  if (row.closed_at) throw err('This request is already closed', 400);
+
+  await cm('requests:act', {
+    id,
+    expectedUpdatedAt: row.updated_at,
+    patch: { closed_at: nowIso() },
+    history: {
+      action: 'Request Closed',
+      detail: comment || 'Closed',
+      actor: user.id != null ? String(user.id) : null,
+      actorName: user.name,
+    },
+  });
+  return get(id);
+}
+
 /* ---------------------------------------------------- comments & documents */
 
 async function comment(id, user, body) {
@@ -711,6 +912,12 @@ const logAction = (actor, action, detail) =>
 async function comparison(id) {
   const row = await rawOrThrow(id);
   const descriptor = registry.descriptorFor(row.request_type);
+  // A 'new' request has no record underneath it, so it can never go stale: what was proposed
+  // is what would be created.
+  if (registry.isNew(descriptor)) {
+    return { changes: row.changes_preview || [], submitted: row.changes_preview || [], stale: false, recordMissing: false };
+  }
+
   const record = await registry.loadRecord(row.request_type, row.record_id);
   if (!record) return { changes: row.changes_preview || [], stale: true, recordMissing: true };
 
@@ -724,8 +931,10 @@ async function comparison(id) {
 module.exports = {
   configure, create, submit, approve, reject, requestInfo, respond, reassign, cancel,
   complete, comment, addAttachment, replaceAttachment, removeAttachment, remove,
+  updateProposal, linkOutcome, close,
   get, list, comparison,
   // Pure pieces, exported for tests and for reuse by future modules.
   STATUSES, OPEN_STATUSES, TERMINAL_STATUSES, TRANSITIONS, canTransition, PRIORITIES,
   buildLadder, decide, levelsIn, approversAt, isCurrentApprover, mapRequest,
+  LEVEL_MODES, DEFAULT_LEVEL_MODE,
 };

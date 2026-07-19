@@ -99,6 +99,9 @@ const QUERIES = {
     });
   },
   'purchaseOrders:vendorGet': ({ id }) => clone(findIn('vendors', 'id', id) || null),
+  'purchaseOrders:vendorList': () => clone(tables.vendors),
+  'masters:list': ({ table }) => clone(tables[table] || []),
+  'generic:list': ({ table }) => clone(tables[table] || []),
 };
 
 const MUTATIONS = {
@@ -180,6 +183,23 @@ const MUTATIONS = {
     return clone({ po, items: [], documents: [], attachments: [] });
   },
 
+  'purchaseOrders:poCreate': ({ po, items }) => {
+    const id = nextNum('purchase_orders');
+    const doc = { ...clone(po), id, po_number: `PO-2026-${String(id).padStart(4, '0')}`, created_at: nowIso() };
+    tables.purchase_orders.push(doc);
+    const rows = (items || []).map((i, index) => ({
+      ...clone(i), id: nextNum('purchase_order_items') + index, purchase_order_id: id,
+    }));
+    tables.purchase_order_items.push(...rows);
+    return clone({ po: doc, items: rows, attachments: [] });
+  },
+
+  'generic:insert': ({ table, document }) => {
+    tables[table] = tables[table] || [];
+    tables[table].push(clone(document));
+    return clone(document);
+  },
+
   'idSequences:reserve': () => {
     const n = tables.requests.length + tables.__reserved++ + 1;
     return { nextId: `REQ-${String(n).padStart(5, '0')}`, number: n, prefix: 'REQ', padding: 5 };
@@ -244,6 +264,13 @@ beforeEach(() => {
       { id: 1, purchase_order_id: 7, line_no: 1, description: 'Laptop', quantity: 1,
         unit: 'pcs', unit_price: 1000, tax_percent: 0, line_total: 1000 },
     ],
+    departments: [
+      { id: 1, name: 'IT', is_active: true },
+      { id: 2, name: 'HR', is_active: true },
+      { id: 3, name: 'Retired Ops', is_active: false },
+    ],
+    asset_subtypes: [{ id: 1, name: 'Laptops', category: 'IT Equipment', is_active: true }],
+    approval_rules: [],
   };
   engine.configure({
     defaultApprovers: async (descriptor) =>
@@ -598,4 +625,180 @@ test('overdue is derived from the due date and only applies while open', async (
   await engine.approve(created.id, APPROVER_1);
   const after = await engine.get(created.id);
   assert.equal(after.overdue, false, 'a completed request is not overdue, however old its due date');
+});
+
+/* ==================================================== purchase requests */
+
+/**
+ * A purchase request is the first request type with no target record: the request *is* the
+ * document. These cover what that changes — that it needs no record to exist, that the
+ * server owns the totals the approval rules band on, that approval alone creates nothing,
+ * and that conversion into a purchase order is guarded on the approval actually having
+ * happened. Everything else about it (the ladder, the audit trail, the notifications) is
+ * the same engine the tests above already cover, which is the point.
+ */
+
+const purchaseRequest = require('./src/requests/purchaseRequest.js');
+const poUpdate = require('./src/services/poUpdate.js');
+
+const ITEMS = [
+  { description: 'Dell Latitude 5450', category: 'Laptops', quantity: 3, unit: 'pcs',
+    estimatedUnitCost: 65000, justification: 'Three new joiners in August' },
+  { description: 'Docking station', category: 'Laptops', quantity: 3, unit: 'pcs',
+    estimatedUnitCost: 8000, justification: 'One per laptop' },
+];
+
+const newPurchaseRequest = ({ proposedChanges, ...overrides } = {}, user = { ...REQUESTER, department: 'IT' }) =>
+  engine.create({
+    requestType: 'purchase.request',
+    proposedChanges: {
+      department: 'IT',
+      requiredByDate: '2026-08-15',
+      items: ITEMS,
+      quotations: [
+        { vendorId: 1, quotationNumber: 'Q-1001', quotationDate: '2026-07-10', amount: 219000 },
+        { vendorId: 2, quotationNumber: 'Q-2002', quotationDate: '2026-07-11', amount: 224000 },
+      ],
+      preferredVendorId: 1,
+      ...(proposedChanges || {}),
+    },
+    reason: 'Laptops for the August intake',
+    ...overrides,
+  }, user);
+
+test('a purchase request needs no target record and totals itself', async () => {
+  const created = await newPurchaseRequest();
+
+  assert.equal(created.status, 'Pending Approval');
+  assert.equal(created.recordId, null, 'a new-document request targets no record');
+  assert.equal(created.recordLabel, 'IT — Dell Latitude 5450 +1 more');
+
+  // 3 x 65000 + 3 x 8000. The server computes this; the client is never asked.
+  assert.equal(created.proposedChanges.estimatedTotal, 219000);
+  assert.equal(created.proposedChanges.items[0].estimatedTotalCost, 195000);
+  assert.equal(created.proposedChanges.preferredVendorName, 'Dell', 'the vendor name is snapshotted');
+});
+
+test('a client-supplied total cannot override the computed one', async () => {
+  // Otherwise a requester could post a token amount and slip under a cost-banded approval rule.
+  const created = await newPurchaseRequest({ proposedChanges: { estimatedTotal: 1 } });
+  assert.equal(created.proposedChanges.estimatedTotal, 219000);
+});
+
+test('a purchase request is validated before anyone is asked to approve it', async () => {
+  const bad = (proposedChanges) => newPurchaseRequest({ proposedChanges });
+
+  await assert.rejects(() => bad({ items: [] }), /at least one line item/i);
+  await assert.rejects(() => bad({ department: 'Marketing' }), /Department Master/i);
+  await assert.rejects(() => bad({ department: 'Retired Ops' }), /archived/i);
+  await assert.rejects(
+    () => bad({ items: [{ ...ITEMS[0], quantity: 0 }] }),
+    /quantity must be greater than zero/i
+  );
+  await assert.rejects(
+    () => bad({ items: [{ ...ITEMS[0], justification: '' }] }),
+    /justification is required/i
+  );
+  await assert.rejects(
+    () => bad({ preferredVendorId: 2, quotations: [{ vendorId: 1, amount: 10 }] }),
+    /must be one of the vendors that quoted/i
+  );
+
+  assert.equal(tables.requests.length, 0, 'nothing invalid reached the approval queue');
+});
+
+test('a requester cannot raise a purchase request for another department', async () => {
+  await assert.rejects(
+    () => newPurchaseRequest({}, { ...REQUESTER, department: 'HR' }),
+    /only raise purchase requests for HR/i
+  );
+});
+
+test('approval alone creates nothing — conversion is a separate act', async () => {
+  const created = await newPurchaseRequest();
+  const done = await engine.approve(created.id, APPROVER_1);
+
+  assert.equal(done.status, 'Completed');
+  assert.equal(tables.purchase_orders.length, 1, 'only the pre-existing PO; approval raised none');
+  assert.equal(done.convertedTo, null);
+  assert.equal(done.displayStatus, 'Approved');
+});
+
+test('an unapproved purchase request cannot be converted', async () => {
+  const created = await newPurchaseRequest();
+  await assert.rejects(
+    () => engine.linkOutcome(created.id, APPROVER_1, { patch: {}, action: 'Converted' }),
+    /has not been approved/i
+  );
+});
+
+test('an approved purchase request converts into a purchase order, once', async () => {
+  const created = await newPurchaseRequest();
+  await engine.approve(created.id, APPROVER_1);
+
+  const payload = (await engine.get(created.id)).proposedChanges;
+  const body = purchaseRequest.toPurchaseOrderBody(payload, {});
+  const { po } = await poUpdate.createPurchaseOrder({ ...body, sourceRequestId: created.id }, APPROVER_1);
+
+  // The order carries what was approved: the items, the quantities, the estimated costs and
+  // the preferred vendor — not a re-entered copy of them.
+  assert.equal(po.vendor_id, 1);
+  assert.equal(po.amount, 219000);
+  assert.equal(po.source_request_id, created.id);
+  assert.equal(tables.purchase_order_items.filter((i) => i.purchase_order_id === po.id).length, 2);
+
+  const linked = await engine.linkOutcome(created.id, APPROVER_1, {
+    patch: { converted_po_id: po.id, converted_po_number: po.po_number },
+    action: 'Converted to Purchase Order',
+    outcomeLabel: 'Purchase Order ' + po.po_number,
+    detail: po.po_number + ' raised on ' + po.vendor,
+    guard: (row) => (row.converted_po_id ? 'already converted into ' + row.converted_po_number : null),
+  });
+
+  assert.equal(linked.convertedTo.id, po.id);
+  assert.equal(linked.displayStatus, 'Converted to Purchase Order');
+  assert.ok(notified.some((n) => n.eventType === 'request.converted'));
+  assert.ok(linked.history.some((h) => h.action === 'Converted to Purchase Order'),
+    'the conversion is in the audit trail');
+
+  // A second conversion of the same request would be a second order for one approval.
+  await assert.rejects(
+    () => engine.linkOutcome(created.id, APPROVER_1, {
+      patch: {},
+      action: 'Converted to Purchase Order',
+      guard: (row) => (row.converted_po_id ? 'already converted into ' + row.converted_po_number : null),
+    }),
+    /already converted/i
+  );
+});
+
+test('a draft purchase request can be revised, and a submitted one cannot', async () => {
+  const draft = await newPurchaseRequest({ submit: false });
+  assert.equal(draft.status, 'Draft');
+
+  const revised = await engine.updateProposal(draft.id, REQUESTER, {
+    proposedChanges: { items: [{ ...ITEMS[0], quantity: 5 }] },
+  });
+  assert.equal(revised.proposedChanges.estimatedTotal, 325000, 'the revision is re-totalled too');
+  assert.ok(revised.history.some((h) => h.action === 'Request Revised'));
+
+  await engine.submit(draft.id, REQUESTER);
+  await assert.rejects(
+    () => engine.updateProposal(draft.id, REQUESTER, { proposedChanges: { items: ITEMS } }),
+    /can no longer be revised/i
+  );
+});
+
+test('only the requester may revise, and only a terminal request may be closed', async () => {
+  const draft = await newPurchaseRequest({ submit: false });
+  await assert.rejects(
+    () => engine.updateProposal(draft.id, OUTSIDER, { proposedChanges: {} }),
+    /only the requester/i
+  );
+  await assert.rejects(() => engine.close(draft.id, REQUESTER), /still in flight/i);
+
+  await engine.submit(draft.id, REQUESTER);
+  await engine.approve(draft.id, APPROVER_1);
+  const closed = await engine.close(draft.id, REQUESTER, { comment: 'Deferred to next quarter' });
+  assert.equal(closed.displayStatus, 'Closed');
 });

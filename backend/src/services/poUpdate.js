@@ -17,6 +17,10 @@ const { amountInWords, computeTotals } = require('../../poFormat');
 const PO_STATUSES = ['Draft', 'Issued', 'Partially Received', 'Received', 'Cancelled'];
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD'];
 const DISCOUNT_TYPES = ['amount', 'percent'];
+// The units a line item can be ordered in. Lives here rather than in the PO route so the
+// purchase-request form validates against the very same list the purchase order will accept —
+// otherwise an approved request could carry a unit its own PO refuses.
+const UNITS = ['pcs', 'nos', 'set', 'box', 'kg', 'ltr', 'mtr', 'hrs', 'license', 'unit'];
 
 // A PO past Draft has been issued to a vendor: the numbers on it are a commitment someone
 // outside the company is holding us to. Those are the orders whose edits must go through an
@@ -83,6 +87,51 @@ function validateHeader(body, { isCreate }) {
   if (body.currency && !CURRENCIES.includes(body.currency)) return `Currency must be one of: ${CURRENCIES.join(', ')}`;
   if (body.discountType && !DISCOUNT_TYPES.includes(body.discountType)) return 'Discount type must be amount or percent';
   return null;
+}
+
+/**
+ * Create a purchase order and return { po, items, attachments }.
+ *
+ * Extracted out of POST /api/purchase-orders for the same reason updatePurchaseOrder was
+ * extracted out of the PATCH: converting an approved purchase request must produce an order
+ * built by the identical code — same vendor snapshot, same totals, same amount-in-words — not
+ * by a second implementation that drifts from it.
+ */
+async function createPurchaseOrder(body, user) {
+  const problem = validateHeader(body, { isCreate: true });
+  if (problem) throw err(problem, 400);
+
+  const vendorSnap = await resolveVendorSnapshot(body);
+  const currency = body.currency || vendorSnap.defaultCurrency || 'INR';
+  const paymentTerms = body.paymentTerms || vendorSnap.defaultPaymentTerms || null;
+  const totals = computeTotals(body.items, {
+    discountType: body.discountType,
+    discountValue: body.discountValue,
+  });
+
+  return cm('purchaseOrders:poCreate', {
+    po: {
+      vendor: vendorSnap.vendor, vendor_id: vendorSnap.vendorId, vendor_address: vendorSnap.vendorAddress,
+      vendor_gst: vendorSnap.vendorGst, vendor_contact_person: vendorSnap.vendorContactPerson,
+      vendor_email: vendorSnap.vendorEmail, vendor_phone: vendorSnap.vendorPhone,
+      issue_date: body.issueDate, expected_delivery_date: body.expectedDeliveryDate || null,
+      status: body.status || 'Draft', amount: totals.grandTotal, currency,
+      quotation_ref: body.quotationRef || null, delivery_schedule: body.deliverySchedule || null,
+      payment_terms: paymentTerms, contact_person: body.contactPerson || null,
+      delivery_location: body.deliveryLocation || null,
+      subtotal: totals.subtotal, tax_total: totals.taxTotal, discount_type: totals.discountType,
+      discount_value: totals.discountValue, discount_amount: totals.discountAmount,
+      amount_in_words: amountInWords(totals.grandTotal, currency),
+      notes: body.notes || null, invoice_id: body.invoiceId || null, amc_id: body.amcId || null,
+      // Where the order came from. A PO converted from a request carries the link both ways,
+      // so neither side of the trail can be read without the other.
+      source_request_id: body.sourceRequestId || null,
+      created_by: user.id ?? null, created_by_name: user.name,
+    },
+    items: linesToItems(totals.lines),
+    attachments: body.attachments,
+    actor: user.name,
+  });
 }
 
 /**
@@ -159,6 +208,7 @@ async function updatePurchaseOrder(id, body, actor, { skipLockCheck = false } = 
 }
 
 module.exports = {
-  updatePurchaseOrder, resolveVendorSnapshot, validateHeader, linesToItems, itemsToLines,
-  isLocked, LOCKED_PO_STATUSES, PO_STATUSES, CURRENCIES, DISCOUNT_TYPES
+  createPurchaseOrder, updatePurchaseOrder, resolveVendorSnapshot, validateHeader,
+  linesToItems, itemsToLines,
+  isLocked, LOCKED_PO_STATUSES, PO_STATUSES, CURRENCIES, DISCOUNT_TYPES, UNITS
 };

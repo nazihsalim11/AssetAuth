@@ -106,7 +106,16 @@ const commentAdded = (request, authorName, body) =>
     explicitRecipients: [request.requestedBy, ...idsOf(request.approvers)].filter(Boolean),
   });
 
+/** An approved request produced another record. Keyed on the outcome, so a retry is idempotent. */
+const converted = (request, outcomeLabel, outcomeDetail) =>
+  send('request.converted', `req:${request.id}:converted:${outcomeLabel}`, {
+    ...ctxOf(request),
+    outcomeLabel,
+    outcomeDetail,
+    explicitRecipients: [request.requestedBy, ...idsOf(request.approvers)].filter(Boolean),
+  });
+
 module.exports = {
   submitted, approvalRequested, assigned, approved, rejected, cancelled, infoRequested,
-  commentAdded,
+  commentAdded, converted,
 };

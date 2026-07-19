@@ -507,6 +507,25 @@ const templates = {
     sms: `AssetFlow: ${c.authorName} commented on ${c.requestId}`
   }),
 
+  // An approved request became another record — today a purchase order raised from a
+  // purchase request. Kept generic like the rest: the type's label and the outcome text
+  // carry the specifics, so a future conversion needs no template of its own.
+  'request.converted': (c) => ({
+    type: 'info',
+    subject: `[${c.requestId}] ${c.outcomeLabel} raised`,
+    inApp: `${c.requestId} became ${c.outcomeLabel}`,
+    email:
+      `An approved request has been converted.\n\n` +
+      `Request:  ${c.requestId}\n` +
+      `Type:     ${c.requestTypeLabel}\n` +
+      `Details:  ${c.recordLabel}\n` +
+      `Raised by: ${c.requestedByName}\n` +
+      `Outcome:  ${c.outcomeLabel}\n` +
+      `${c.outcomeDetail ? `${c.outcomeDetail}\n` : ''}` +
+      `\n— AssetFlow Requests`,
+    sms: `AssetFlow: ${c.requestId} converted to ${c.outcomeLabel}`
+  }),
+
   'system.bulk_import_completed': (c) => ({
     type: c.failed > 0 ? 'warning' : 'info',
     subject: `Bulk ${c.kind} import finished: ${c.success} of ${c.total}`,

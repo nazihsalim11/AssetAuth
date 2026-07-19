@@ -172,6 +172,13 @@ export default defineSchema({
     .index("by_original_id", ["id"])
     .index("by_request_id", ["request_id"]),
 
+  // Configurable approval ladders (see backend/src/requests/rules.js). One row per rule:
+  // what it matches (type, department, cost band, priority, category) and the levels it
+  // builds. Generic across every request type — there is no per-module rule table.
+  approval_rules: defineTable(v.any())
+    .index("by_original_id", ["id"])
+    .index("by_request_type", ["request_type"]),
+
   import_jobs: defineTable(v.any())
     .index("by_original_id", ["id"])
     .index("by_import_key", ["import_key"]),

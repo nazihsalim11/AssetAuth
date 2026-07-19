@@ -33,6 +33,10 @@ const MODULES = [
   // request-more-info too — they are the same act of deciding, and splitting them would let a
   // role approve but not reject, which is not a coherent reviewer. `manage` is reassignment.
   { key: 'requests',             label: 'Requests & Approvals',   nav: 'requests',   verbs: ['view', 'create', 'edit', 'delete', 'approve', 'export', 'manage'] },
+  // Purchase Requests ride the Requests engine, but who may *raise* a spend request is a
+  // separate question from who may take part in approvals at all — hence its own module.
+  // `manage` is what lets a role raise one for a department other than its own.
+  { key: 'purchaseRequests',     label: 'Purchase Requests',      nav: null,         verbs: ['view', 'create', 'edit', 'delete', 'export', 'manage'] },
   { key: 'assets',               label: 'Asset Directory',        nav: 'assets',     verbs: ['view', 'create', 'edit', 'delete', 'export', 'manage'] },
   { key: 'allocations',          label: 'Allocations & Movements', nav: 'allocations', verbs: ['view', 'create', 'edit', 'delete', 'approve', 'export'] },
   { key: 'amc',                  label: 'AMC Contracts',          nav: 'amc',        verbs: ['view', 'create', 'edit', 'delete', 'export'] },
@@ -78,6 +82,7 @@ const DEFAULT_GRANTS = {
     dashboard: 'all', assets: 'all', allocations: 'all', amc: 'all', finance: 'all',
     documents: 'all', qr: 'all', reports: 'all', emails: 'all', tickets: 'all',
     sla: 'all', knowledge: 'all', userDirectory: 'all', requests: 'all',
+    purchaseRequests: 'all',
     userManagement: ['view', 'create', 'edit'],           // not manage (permission editing)
     departments: 'all', branches: 'all', categories: 'all', vendors: 'all',
     notificationSettings: 'all', auditLogs: ['view', 'export']
@@ -88,14 +93,16 @@ const DEFAULT_GRANTS = {
     documents: ['view', 'create', 'edit'], qr: 'all', reports: ['view', 'export'],
     tickets: 'all', sla: 'all', knowledge: ['view', 'create', 'edit'],
     userDirectory: ['view'], categories: 'all', vendors: 'all',
-    requests: ['view', 'create', 'edit', 'approve', 'export']
+    requests: ['view', 'create', 'edit', 'approve', 'export'],
+    purchaseRequests: ['view', 'create', 'edit', 'export']
   },
   'HR Team': {
     dashboard: 'all', userDirectory: 'all',
     userManagement: ['view', 'create', 'edit'],
     departments: 'all', documents: ['view'], knowledge: ['view'],
     reports: ['view', 'export'], tickets: ['view', 'create'],
-    requests: ['view', 'create', 'edit']
+    requests: ['view', 'create', 'edit'],
+    purchaseRequests: ['view', 'create', 'edit', 'export']
   },
   'Manager': {
     dashboard: 'all', assets: ['view'], allocations: ['view', 'approve'],
@@ -103,7 +110,9 @@ const DEFAULT_GRANTS = {
     reports: ['view', 'export'], tickets: ['view', 'edit', 'approve'],
     sla: ['view'], knowledge: ['view'], userDirectory: ['view'],
     // The approver role: decides and reassigns, but does not delete the audit trail.
-    requests: ['view', 'create', 'edit', 'approve', 'export', 'manage']
+    requests: ['view', 'create', 'edit', 'approve', 'export', 'manage'],
+    // Managers approve spend across departments, so they may raise for any of them.
+    purchaseRequests: ['view', 'create', 'edit', 'export', 'manage']
   },
   'Employee': {
     dashboard: 'all', tickets: ['view', 'create'], knowledge: ['view'],
@@ -117,13 +126,15 @@ const DEFAULT_GRANTS = {
     dashboard: 'all', assets: 'all', allocations: 'all', amc: 'all',
     documents: ['view', 'create', 'edit'], qr: 'all', reports: ['view', 'export'],
     tickets: 'all', knowledge: ['view'], userDirectory: ['view'],
-    requests: ['view', 'create', 'edit', 'approve']
+    requests: ['view', 'create', 'edit', 'approve'],
+    purchaseRequests: ['view', 'create', 'edit', 'export']
   },
   'Finance Team': {
     dashboard: 'all', finance: 'all', amc: ['view'], reports: ['view', 'export'],
     documents: ['view'], assets: ['view'], auditLogs: ['view', 'export'],
     // Purchase order edit requests land here, so this role decides them.
-    requests: ['view', 'create', 'edit', 'approve', 'export']
+    requests: ['view', 'create', 'edit', 'approve', 'export'],
+    purchaseRequests: ['view', 'create', 'edit', 'export', 'manage']
   },
   'Auditor': {
     // Read-only everywhere it can see, plus export. No create/edit/delete/approve/manage.
@@ -131,7 +142,7 @@ const DEFAULT_GRANTS = {
     amc: ['view', 'export'], finance: ['view', 'export'], documents: ['view', 'export'],
     reports: ['view', 'export'], tickets: ['view', 'export'], knowledge: ['view'],
     userDirectory: ['view', 'export'], auditLogs: ['view', 'export'],
-    requests: ['view', 'export']
+    requests: ['view', 'export'], purchaseRequests: ['view', 'export']
   }
 };
 

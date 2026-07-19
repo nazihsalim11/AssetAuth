@@ -32,6 +32,7 @@ const mastersRoutes = require('./src/routes/masters');
 const idSequencesRoutes = require('./src/routes/idSequences');
 const bulkRoutes = require('./src/routes/bulk');
 const requestsRoutes = require('./src/routes/requests');
+const purchaseRequestsRoutes = require('./src/routes/purchaseRequests');
 const createActorOf = require('./src/utils/actor');
 
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
@@ -218,6 +219,7 @@ bulkRoutes.register(app, { requirePermission });
 // entries in src/requests/registry.js — adding another needs no new route and no new
 // approval logic. Registered before the PO routes so nothing shadows /api/requests/*.
 requestsRoutes.register(app, { requirePermission, roleCan });
+purchaseRequestsRoutes.register(app, { requirePermission, roleCan });
 
 // --- FILE UPLOAD API ---
 // Extracted verbatim to src/routes/files.js (upload + signed-url); the multer

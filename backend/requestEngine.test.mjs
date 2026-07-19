@@ -175,11 +175,17 @@ test('every registered type declares what the engine needs to run it generically
     assert.equal(d.key, key, `${key}: key mismatch`);
     assert.ok(d.label, `${key}: no label`);
     assert.ok(d.module, `${key}: no permission module`);
-    assert.ok(d.table, `${key}: no table`);
-    assert.ok(d.idField, `${key}: no idField`);
-    assert.ok(['number', 'string'].includes(d.idType), `${key}: bad idType`);
-    assert.ok(d.labelField, `${key}: no labelField`);
-    assert.ok(['edit', 'action'].includes(d.kind), `${key}: bad kind`);
+    assert.ok(['edit', 'action', 'new'].includes(d.kind), `${key}: bad kind`);
+    // A 'new' type proposes a document rather than an edit, so it has no target record to
+    // describe — but it must be able to name itself for the lists and the audit trail.
+    if (d.kind === 'new') {
+      assert.equal(typeof d.describe, 'function', `${key}: a 'new' type must declare describe()`);
+    } else {
+      assert.ok(d.table, `${key}: no table`);
+      assert.ok(d.idField, `${key}: no idField`);
+      assert.ok(['number', 'string'].includes(d.idType), `${key}: bad idType`);
+      assert.ok(d.labelField, `${key}: no labelField`);
+    }
     assert.ok(Object.keys(d.fields).length > 0, `${key}: no proposable fields`);
     for (const [fk, spec] of Object.entries(d.fields)) {
       assert.ok(spec.label, `${key}.${fk}: no label`);
@@ -215,7 +221,7 @@ test('every request event renders on all three channels', () => {
     comment: 'please attach the cheque', authorName: 'Alan', dueDate: '2026-08-01',
   };
   const events = templates.eventTypes.filter((e) => e.startsWith('request.'));
-  assert.equal(events.length, 8, 'all eight lifecycle events must have templates');
+  assert.equal(events.length, 9, 'every lifecycle event must have a template');
   for (const event of events) {
     const r = templates.render(event, ctx);
     for (const channel of ['subject', 'inApp', 'email', 'sms']) {
@@ -251,4 +257,189 @@ test('action types fold their fixed changes into the diffable field set', () => 
   assert.equal(registry.TYPES['asset.disposal'].fixedChanges.status, 'Disposed');
   assert.equal(registry.TYPES['asset.disposal'].fields.status, undefined,
     'status must not be requester-proposable on a disposal');
+});
+
+/* ========================================================= approval rules */
+
+/**
+ * The configurable ladder. Pure parts only: which rule governs a request, and who that rule
+ * puts on the ladder. The database round-trip is exercised by the workflow tests.
+ */
+
+const rules = require('./src/requests/rules.js');
+
+const RULE_ANY = {
+  id: 1, name: 'Everything needs a manager', active: true,
+  match: {}, levels: [{ level: 1, roles: ['Manager'] }],
+};
+const RULE_IT_BIG = {
+  id: 2, name: 'IT spend over a lakh', active: true, request_type: 'purchase.request',
+  match: { departments: ['IT'], minAmount: 100000 },
+  levels: [{ level: 1, roles: ['Manager'] }, { level: 2, roles: ['Finance Team'] }],
+};
+const RULE_OFF = {
+  id: 3, name: 'Disabled', active: false, match: { departments: ['IT'] },
+  levels: [{ level: 1, roles: ['Employee'] }],
+};
+
+const CONTEXT = {
+  requestType: 'purchase.request', department: 'IT', priority: 'Medium',
+  amount: 219000, categories: ['Laptops'],
+};
+
+test('the most specific matching rule wins', async () => {
+  const chosen = await rules.match(CONTEXT, [RULE_ANY, RULE_IT_BIG, RULE_OFF]);
+  assert.equal(chosen.id, 2, 'a rule that matched on type, department and cost beats a catch-all');
+});
+
+test('a rule that does not match is not a fallback', async () => {
+  // Under the cost floor, so the narrow rule is out and the catch-all governs.
+  const cheap = await rules.match({ ...CONTEXT, amount: 500 }, [RULE_ANY, RULE_IT_BIG]);
+  assert.equal(cheap.id, 1);
+
+  // Wrong department: the narrow rule must not apply to HR's spend.
+  const hr = await rules.match({ ...CONTEXT, department: 'HR' }, [RULE_IT_BIG]);
+  assert.equal(hr, null);
+});
+
+test('an inactive rule never applies', async () => {
+  assert.equal(await rules.match(CONTEXT, [RULE_OFF]), null);
+});
+
+test('an absent criterion matches anything, a present one must be satisfied', () => {
+  assert.equal(rules.score(RULE_ANY, CONTEXT), 0, 'a catch-all satisfies nothing in particular');
+  assert.equal(rules.score(RULE_IT_BIG, CONTEXT), 3, 'type + department + minimum');
+  assert.equal(rules.score({ ...RULE_ANY, match: { priorities: ['Critical'] } }, CONTEXT), null);
+  assert.equal(rules.score({ ...RULE_ANY, match: { categories: ['Furniture'] } }, CONTEXT), null);
+  assert.equal(rules.score({ ...RULE_ANY, match: { maxAmount: 1000 } }, CONTEXT), null);
+});
+
+test('a request spanning several categories is caught by a rule naming any one of them', () => {
+  const mixed = { ...CONTEXT, categories: ['Stationery', 'Laptops'] };
+  assert.ok(rules.score({ ...RULE_ANY, match: { categories: ['Laptops'] } }, mixed) !== null);
+});
+
+const USERS = [
+  { id: 'u1', name: 'Maya Manager', role: 'Manager' },
+  { id: 'u2', name: 'Mo Manager', role: 'Manager' },
+  { id: 'u3', name: 'Fay Finance', role: 'Finance Team' },
+  { id: 'u4', name: 'Rita Requester', role: 'Manager' },
+];
+
+test('a level naming a role expands to everyone holding it — that is parallel approval', () => {
+  const ladder = rules.expand(RULE_IT_BIG, USERS, { id: 'u4' });
+  const level1 = ladder.filter((a) => a.level === 1);
+
+  assert.deepEqual(level1.map((a) => a.userId), ['u1', 'u2'], 'both managers sign level 1');
+  assert.deepEqual(ladder.filter((a) => a.level === 2).map((a) => a.userId), ['u3']);
+  assert.ok(!ladder.some((a) => a.userId === 'u4'), 'the requester is never on their own ladder');
+});
+
+test('a level may name people directly, and the ladder stays sequential across levels', () => {
+  const ladder = rules.expand(
+    { levels: [{ level: 1, userIds: ['u3'] }, { level: 2, roles: ['Manager'] }] },
+    USERS,
+    { id: 'u4' }
+  );
+  assert.equal(ladder[0].userId, 'u3');
+  assert.deepEqual([...new Set(ladder.map((a) => a.level))], [1, 2]);
+});
+
+test('a rule with no approver on any level is rejected at write time', () => {
+  assert.throws(
+    () => rules.validateRule({ name: 'Empty', levels: [{ level: 1 }] }),
+    /names no approver/i
+  );
+  assert.throws(() => rules.validateRule({ name: 'No levels', levels: [] }), /at least one approval level/i);
+  assert.throws(
+    () => rules.validateRule({
+      name: 'Backwards band', levels: [{ level: 1, roles: ['Manager'] }],
+      match: { minAmount: 500, maxAmount: 100 },
+    }),
+    /cannot be greater than the maximum/i
+  );
+});
+
+/* ============================================== quorum ('any') levels */
+
+/**
+ * A parallel level clears one of two ways. 'all' is the default and the safer one; 'any' is
+ * for "whichever duty manager is around", where waiting on both would just stall the queue.
+ */
+
+const anyLevel = (...userIds) => userIds.map((id) => ({ level: 1, mode: 'any', userId: id }));
+
+test("an 'any' level clears on the first approval", () => {
+  const ladder = engine.buildLadder([...anyLevel('u1', 'u2', 'u3')]);
+  assert.ok(ladder.every((a) => a.mode === 'any'), 'the mode is stored on every row of the level');
+
+  const result = engine.decide(ladder, 1, 'u2', 'Approved', 'fine by me');
+  assert.equal(result.outcome, 'approved', 'one signature carries a single-level any-of ladder');
+});
+
+test("the approvers an 'any' level did not need are released, not left pending", () => {
+  const { ladder } = engine.decide(engine.buildLadder([...anyLevel('u1', 'u2')]), 1, 'u1', 'Approved');
+
+  assert.equal(ladder.find((a) => a.user_id === 'u1').status, 'Approved');
+  assert.equal(ladder.find((a) => a.user_id === 'u2').status, 'Not required',
+    'a slot nobody owes a decision on must leave their queue');
+});
+
+test("an 'all' level still needs every signature", () => {
+  const ladder = engine.buildLadder([
+    { level: 1, userId: 'u1' },
+    { level: 1, userId: 'u2' },
+  ]);
+  assert.ok(ladder.every((a) => a.mode === 'all'), 'all-must-sign stays the default');
+
+  const first = engine.decide(ladder, 1, 'u1', 'Approved');
+  assert.equal(first.outcome, 'pending', 'one of two is not a cleared level');
+  assert.equal(engine.decide(first.ladder, 1, 'u2', 'Approved').outcome, 'approved');
+});
+
+test("a rejection vetoes an 'any' level too", () => {
+  // Otherwise a level where one person can wave it through and another can refuse would
+  // resolve on whoever clicked first, which is not a control.
+  const result = engine.decide(engine.buildLadder([...anyLevel('u1', 'u2')]), 1, 'u1', 'Rejected', 'no');
+  assert.equal(result.outcome, 'rejected');
+});
+
+test("an 'any' level advances a multi-level ladder rather than approving it", () => {
+  const ladder = engine.buildLadder([
+    { level: 1, mode: 'any', userId: 'u1' },
+    { level: 1, mode: 'any', userId: 'u2' },
+    { level: 2, userId: 'u3' },
+  ]);
+  const result = engine.decide(ladder, 1, 'u1', 'Approved');
+
+  assert.equal(result.outcome, 'advanced');
+  assert.equal(result.level, 2);
+  assert.equal(result.ladder.find((a) => a.user_id === 'u2').status, 'Not required');
+  assert.equal(result.ladder.find((a) => a.user_id === 'u3').status, 'Pending');
+});
+
+test('an unknown mode falls back to all-must-sign', () => {
+  // A hand-edited rule row must not be able to weaken a level by naming a mode nobody
+  // implements — the safe default is the strict one.
+  const ladder = engine.buildLadder([
+    { level: 1, mode: 'whatever', userId: 'u1' },
+    { level: 1, mode: 'whatever', userId: 'u2' },
+  ]);
+  assert.ok(ladder.every((a) => a.mode === 'all'));
+  assert.equal(engine.decide(ladder, 1, 'u1', 'Approved').outcome, 'pending');
+});
+
+test('a rule level carries its mode into the ladder it builds', () => {
+  const expanded = rules.expand(
+    { levels: [{ level: 1, mode: 'any', roles: ['Manager'] }, { level: 2, roles: ['Finance Team'] }] },
+    USERS,
+    { id: 'u4' }
+  );
+  assert.ok(expanded.filter((a) => a.level === 1).every((a) => a.mode === 'any'));
+  assert.ok(expanded.filter((a) => a.level === 2).every((a) => a.mode === 'all'));
+
+  assert.throws(
+    () => rules.validateRule({ name: 'Bad mode', levels: [{ level: 1, mode: 'some', roles: ['Manager'] }] }),
+    /mode must be/i
+  );
 });

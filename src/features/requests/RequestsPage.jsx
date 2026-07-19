@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle, CheckCircle2, ClipboardList, Clock, FileWarning, Inbox, Plus,
-  RefreshCw, Search, Send, ShieldQuestion, Trash2, UserCog, XCircle
+  AlertTriangle, CheckCircle2, ClipboardList, Clock, Download, FileWarning, Inbox, Pencil,
+  Plus, RefreshCw, Search, Send, ShieldQuestion, ShoppingCart, Trash2, UserCog, XCircle
 } from 'lucide-react';
 import { api } from '../../api';
 import Modal from '../../Modal';
@@ -9,7 +9,14 @@ import CustomSelect from '../../CustomSelect';
 import Checkbox from '../../Checkbox';
 import { SpinnerButton } from '../../SpinnerButton';
 import { ApprovalTimeline, AttachmentList, AuditTimeline, CommentThread, DiffTable } from './RequestPieces';
+import PurchaseRequestForm from './PurchaseRequestForm';
+import PurchaseRequestPanel from './PurchaseRequestPanel';
 import { coerceInput, fmtDate, fmtDateTime, priorityBadge, statusBadge } from './requestUi';
+
+// The one request type with a form of its own: its payload is line items and quotations, not
+// a list of scalar fields, so the generated form cannot express it. Everything else about it
+// — the ladder, the drawer, the audit trail — is the shared machinery.
+const PURCHASE_REQUEST = 'purchase.request';
 
 /**
  * Requests — the central approval workspace.
@@ -61,6 +68,7 @@ export default function RequestsPage({ can, currentUser, addToast }) {
 
   const [openId, setOpenId] = useState(null);
   const [creating, setCreating] = useState(false);
+  const [raisingPurchase, setRaisingPurchase] = useState(false);
 
   const canApprove = can('requests', 'approve');
   const canManage = can('requests', 'manage');
@@ -205,6 +213,16 @@ export default function RequestsPage({ can, currentUser, addToast }) {
           <span className="card-title"><ClipboardList /> {SCOPES.find((s) => s.key === scope)?.label}</span>
           <div style={{ display: 'flex', gap: '8px' }}>
             <button className="btn btn-secondary" onClick={load}><RefreshCw size={14} /> Refresh</button>
+            {can('requests', 'export') && (
+              <button className="btn btn-secondary" onClick={() => exportCsv(sorted)} disabled={!sorted?.length}>
+                <Download size={14} /> Export
+              </button>
+            )}
+            {canCreate && (
+              <button className="btn btn-secondary" onClick={() => setRaisingPurchase(true)}>
+                <ShoppingCart size={15} /> New purchase request
+              </button>
+            )}
             {canCreate && (
               <button className="btn btn-primary" onClick={() => setCreating(true)}><Plus size={15} /> New request</button>
             )}
@@ -296,7 +314,9 @@ export default function RequestsPage({ can, currentUser, addToast }) {
                     <td onClick={() => setOpenId(r.id)} style={{ fontSize: '12.5px' }}>{r.recordLabel}</td>
                     <td onClick={() => setOpenId(r.id)} style={{ fontSize: '12.5px' }}>{r.requestedByName}</td>
                     <td onClick={() => setOpenId(r.id)}><span className={priorityBadge(r.priority)}>{r.priority}</span></td>
-                    <td onClick={() => setOpenId(r.id)}><span className={statusBadge(r.status)}>{r.status}</span></td>
+                    <td onClick={() => setOpenId(r.id)}>
+                      <span className={statusBadge(r.displayStatus || r.status)}>{r.displayStatus || r.status}</span>
+                    </td>
                     <td onClick={() => setOpenId(r.id)} style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
                       {r.totalLevels > 1 ? `Level ${r.currentLevel} of ${r.totalLevels}` : '—'}
                     </td>
@@ -320,6 +340,16 @@ export default function RequestsPage({ can, currentUser, addToast }) {
           canApprove={canApprove}
           canManage={canManage}
           canDelete={canDelete}
+          canConvert={can('finance', 'create')}
+          docTypes={options?.types.find((t) => t.key === PURCHASE_REQUEST)?.docTypes}
+          addToast={addToast}
+        />
+      )}
+
+      {raisingPurchase && (
+        <PurchaseRequestForm
+          onClose={() => setRaisingPurchase(false)}
+          onSaved={async (id) => { setRaisingPurchase(false); await load(); setOpenId(id); }}
           addToast={addToast}
         />
       )}
@@ -336,9 +366,45 @@ export default function RequestsPage({ can, currentUser, addToast }) {
   );
 }
 
+/**
+ * Export what is on screen, after the active scope, filters and sort — exporting the whole
+ * table regardless of the view would be a different (and mostly useless) report.
+ */
+function exportCsv(rows = []) {
+  const columns = [
+    ['Request', (r) => r.id],
+    ['Type', (r) => r.requestTypeLabel],
+    ['Subject', (r) => r.recordLabel],
+    ['Requested by', (r) => r.requestedByName],
+    ['Raised on', (r) => r.requestedOn],
+    ['Priority', (r) => r.priority],
+    ['Status', (r) => r.displayStatus || r.status],
+    ['Approval', (r) => `Level ${r.currentLevel} of ${r.totalLevels}`],
+    ['Due', (r) => r.dueDate || ''],
+    ['Completed', (r) => r.completedAt || ''],
+  ];
+  // A field containing a comma, a quote or a newline has to be quoted, or the file silently
+  // gains columns when someone opens it.
+  const cell = (v) => {
+    const s = String(v ?? '');
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const csv = [
+    columns.map(([label]) => cell(label)).join(','),
+    ...rows.map((r) => columns.map(([, get]) => cell(get(r))).join(',')),
+  ].join('\r\n');
+
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `requests-${new Date().toISOString().split('T')[0]}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 /* ====================================================== review drawer */
 
-function RequestDrawer({ id, onClose, onChanged, currentUser, canApprove, canManage, canDelete, addToast }) {
+function RequestDrawer({ id, onClose, onChanged, currentUser, canApprove, canManage, canDelete, canConvert, docTypes, addToast }) {
   const [request, setRequest] = useState(null);
   const [comparison, setComparison] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -346,6 +412,7 @@ function RequestDrawer({ id, onClose, onChanged, currentUser, canApprove, canMan
   const [comment, setComment] = useState('');
   const [reassigning, setReassigning] = useState(false);
   const [approvers, setApprovers] = useState([]);
+  const [revising, setRevising] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -395,6 +462,11 @@ function RequestDrawer({ id, onClose, onChanged, currentUser, canApprove, canMan
   );
   const decidable = request && ['Pending Approval', 'Under Review'].includes(request.status);
   const canDecideNow = canApprove && myTurn && decidable;
+  const isPurchase = request?.requestType === PURCHASE_REQUEST;
+  // Approved, applied, not yet turned into an order, not closed. The server re-checks all of
+  // this — the button is only hidden where it would certainly fail.
+  const convertible = isPurchase && request.status === 'Completed'
+    && !request.convertedTo && !request.closedAt;
 
   return (
     <Modal isOpen onClose={onClose} maxWidth="880px"
@@ -406,6 +478,27 @@ function RequestDrawer({ id, onClose, onChanged, currentUser, canApprove, canMan
             <SpinnerButton className="btn btn-primary" loadingText="Applying…"
               onClick={() => act(() => api.applyRequest(request.id), 'Applied', 'The approved changes were applied.')}>
               Retry apply
+            </SpinnerButton>
+          )}
+          {convertible && canConvert && (
+            <SpinnerButton className="btn btn-primary" loadingText="Converting…"
+              onClick={() => act(
+                () => api.convertPurchaseRequest(request.id),
+                'Purchase order raised',
+                'The approved request has been converted.'
+              )}>
+              <ShoppingCart size={14} /> Convert to purchase order
+            </SpinnerButton>
+          )}
+          {isPurchase && isMine && ['Draft', 'Under Review'].includes(request.status) && (
+            <button className="btn btn-secondary" onClick={() => setRevising(true)}>
+              <Pencil size={14} /> Edit request
+            </button>
+          )}
+          {isPurchase && (isMine || canManage) && ['Completed', 'Rejected', 'Cancelled'].includes(request.status) && !request.closedAt && (
+            <SpinnerButton className="btn btn-secondary" loadingText="Closing…"
+              onClick={() => act(() => api.closePurchaseRequest(request.id, { comment }), 'Closed', 'The request has been closed.')}>
+              Close request
             </SpinnerButton>
           )}
           {request.status === 'Draft' && isMine && (
@@ -471,7 +564,7 @@ function RequestDrawer({ id, onClose, onChanged, currentUser, canApprove, canMan
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           {/* header facts */}
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-            <span className={statusBadge(request.status)}>{request.status}</span>
+            <span className={statusBadge(request.displayStatus)}>{request.displayStatus}</span>
             <span className={priorityBadge(request.priority)}>{request.priority}</span>
             {request.totalLevels > 1 && (
               <span className="badge">Level {request.currentLevel} of {request.totalLevels}</span>
@@ -515,11 +608,14 @@ function RequestDrawer({ id, onClose, onChanged, currentUser, canApprove, canMan
             ))}
           </div>
 
-          {tab === 'review' && <DiffTable comparison={comparison} />}
+          {tab === 'review' && (isPurchase
+            ? <PurchaseRequestPanel request={request} addToast={addToast} />
+            : <DiffTable comparison={comparison} />)}
           {tab === 'approvals' && <ApprovalTimeline request={request} />}
           {tab === 'documents' && (
             <AttachmentList
               attachments={request.attachments}
+              docTypes={isPurchase ? docTypes : undefined}
               canEdit={(isMine || canApprove) && ['Draft', 'Pending Approval', 'Under Review'].includes(request.status)}
               addToast={addToast}
               onAdd={async (doc) => { await api.addRequestAttachment(request.id, doc); await refresh(); }}
@@ -554,6 +650,15 @@ function RequestDrawer({ id, onClose, onChanged, currentUser, canApprove, canMan
             </div>
           )}
         </div>
+      )}
+
+      {revising && request && (
+        <PurchaseRequestForm
+          request={request}
+          onClose={() => setRevising(false)}
+          onSaved={async () => { setRevising(false); await refresh(); }}
+          addToast={addToast}
+        />
       )}
 
       {reassigning && request && (
@@ -639,7 +744,11 @@ function CreateRequestModal({ options, onClose, onCreated, addToast }) {
   const [dueDate, setDueDate] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const descriptor = options.types.find((t) => t.key === type);
+  // Types that propose a *new* document rather than an edit carry a payload the generated
+  // form cannot express (line items, quotations), and have no record to look up. They get
+  // their own entry point — see the "New purchase request" button.
+  const editTypes = options.types.filter((t) => t.needsRecord !== false);
+  const descriptor = editTypes.find((t) => t.key === type);
 
   const lookup = async () => {
     if (!type || !recordId.trim()) return;
@@ -703,7 +812,7 @@ function CreateRequestModal({ options, onClose, onCreated, addToast }) {
           <label className="form-label">Request type *</label>
           <CustomSelect value={type} placeholder="What kind of request?"
             onChange={(e) => { setType(e.target.value); setRecord(null); setValues({}); }}
-            options={options.types.map((t) => ({ value: t.key, label: t.label }))} />
+            options={editTypes.map((t) => ({ value: t.key, label: t.label }))} />
         </div>
         <div className="form-group">
           <label className="form-label">Record *</label>

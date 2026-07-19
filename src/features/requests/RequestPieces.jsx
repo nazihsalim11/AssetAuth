@@ -4,7 +4,7 @@ import { api } from '../../api';
 import { openStoredFile } from '../../files';
 import CustomSelect from '../../CustomSelect';
 import { SpinnerButton } from '../../SpinnerButton';
-import { displayValue, fmtDateTime, historyTone, statusBadge } from './requestUi';
+import { displayValue, fmtDateTime, historyTone } from './requestUi';
 
 /**
  * The reusable review components. Each takes plain data, so any module that later grows its
@@ -99,6 +99,16 @@ export function DiffTable({ comparison, loading }) {
 
 /* ================================================== approval timeline */
 
+// An approver slot's own vocabulary. "Not required" is what an 'any' level leaves behind on
+// the people who did not get there first — neutral, not a rejection, which is how it would
+// read if it fell through to the red badge.
+const APPROVER_BADGE = {
+  Pending: 'badge',
+  Approved: 'badge badge-available',
+  Rejected: 'badge badge-disposed',
+  'Not required': 'badge',
+};
+
 /** Where the request is in its ladder: who signed, who is deciding, who is next. */
 export function ApprovalTimeline({ request }) {
   const levels = [...new Set((request.approvers || []).map((a) => a.level))].sort((a, b) => a - b);
@@ -120,13 +130,16 @@ export function ApprovalTimeline({ request }) {
                 <span className="timeline-date">
                   Level {level} of {request.totalLevels}{active ? ' — deciding now' : ''}
                 </span>
+                {at.length > 1 && (
+                  <span className="timeline-actor">
+                    {at[0].mode === 'any' ? 'any one of them' : 'all must approve'}
+                  </span>
+                )}
               </div>
               {at.map((a) => (
                 <div key={`${a.level}-${a.userId}`} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'center' }}>
                   <span style={{ fontSize: '13px' }}>{a.userName || a.userId}</span>
-                  <span className={statusBadge(a.status === 'Pending' ? 'Draft' : a.status === 'Approved' ? 'Approved' : 'Rejected')}>
-                    {a.status}
-                  </span>
+                  <span className={APPROVER_BADGE[a.status] || 'badge'}>{a.status}</span>
                 </div>
               ))}
               {at.filter((a) => a.comment).map((a) => (

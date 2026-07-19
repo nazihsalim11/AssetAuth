@@ -21,17 +21,13 @@
 const { cq, cm } = require('./convexApi');
 const storage = require('./storage');
 const emailChannel = require('./notifications/channels/email');
-const { amountInWords, computeTotals } = require('./poFormat');
 // The PO writer, the vendor snapshot and the header validation live in src/services/poUpdate
 // so this route and the Requests approval engine share exactly one code path onto a PO.
 const poUpdate = require('./src/services/poUpdate');
 
-const {
-  PO_STATUSES, CURRENCIES, DISCOUNT_TYPES, LOCKED_PO_STATUSES,
-  resolveVendorSnapshot: resolveVendor, validateHeader, linesToItems,
-} = poUpdate;
+const { PO_STATUSES, CURRENCIES, DISCOUNT_TYPES, LOCKED_PO_STATUSES } = poUpdate;
 
-const UNITS = ['pcs', 'nos', 'set', 'box', 'kg', 'ltr', 'mtr', 'hrs', 'license', 'unit'];
+const UNITS = poUpdate.UNITS;
 const TAX_RATES = [0, 5, 12, 18, 28];
 
 // Surface a ConvexError's message so route handlers can map it to an HTTP status.
@@ -523,46 +519,14 @@ function register(app, { requirePermission, requireUser, roleCan }) {
     const user = await requirePermission(req, res, 'finance', 'create');
     if (!user) return;
 
-    const problem = validateHeader(req.body, { isCreate: true });
-    if (problem) return res.status(400).json({ error: problem });
-
-    let vendorSnap;
     try {
-      vendorSnap = await resolveVendor(req.body);
-    } catch (err) {
-      return res.status(err.statusCode || 500).json({ error: err.message });
-    }
-
-    const currency = req.body.currency || vendorSnap.defaultCurrency || 'INR';
-    const paymentTerms = req.body.paymentTerms || vendorSnap.defaultPaymentTerms || null;
-    const totals = computeTotals(req.body.items, { discountType: req.body.discountType, discountValue: req.body.discountValue });
-    const words = amountInWords(totals.grandTotal, currency);
-
-    try {
-      const { po, items, attachments } = await cm('purchaseOrders:poCreate', {
-        po: {
-          vendor: vendorSnap.vendor, vendor_id: vendorSnap.vendorId, vendor_address: vendorSnap.vendorAddress,
-          vendor_gst: vendorSnap.vendorGst, vendor_contact_person: vendorSnap.vendorContactPerson,
-          vendor_email: vendorSnap.vendorEmail, vendor_phone: vendorSnap.vendorPhone,
-          issue_date: req.body.issueDate, expected_delivery_date: req.body.expectedDeliveryDate || null,
-          status: req.body.status || 'Draft', amount: totals.grandTotal, currency,
-          quotation_ref: req.body.quotationRef || null, delivery_schedule: req.body.deliverySchedule || null,
-          payment_terms: paymentTerms, contact_person: req.body.contactPerson || null,
-          delivery_location: req.body.deliveryLocation || null,
-          subtotal: totals.subtotal, tax_total: totals.taxTotal, discount_type: totals.discountType,
-          discount_value: totals.discountValue, discount_amount: totals.discountAmount, amount_in_words: words,
-          notes: req.body.notes || null, invoice_id: req.body.invoiceId || null, amc_id: req.body.amcId || null,
-          created_by: user.id ?? null, created_by_name: user.name
-        },
-        items: linesToItems(totals.lines),
-        attachments: req.body.attachments,
-        actor: user.name
-      });
+      const { po, items, attachments } = await poUpdate.createPurchaseOrder(req.body, user);
       await logAction(user.name, 'Purchase Order Created', `Created PO ${po.po_number} for ${po.vendor}`);
       res.status(201).json({ ...mapPo(po), items: items.map(mapItem), documents: [], attachments: attachments.map(mapAttachment) });
     } catch (err) {
-      console.error('POST /api/purchase-orders failed:', err);
-      res.status(500).json({ error: 'Could not create purchase order: ' + cleanErr(err) });
+      const status = err.statusCode || 500;
+      if (status === 500) console.error('POST /api/purchase-orders failed:', err);
+      res.status(status).json({ error: status === 500 ? 'Could not create purchase order: ' + cleanErr(err) : err.message });
     }
   });
 

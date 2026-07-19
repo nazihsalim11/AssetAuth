@@ -16,6 +16,9 @@ const STATUS_BADGES = {
   'Completed': 'badge badge-available',
   'Rejected': 'badge badge-disposed',
   'Cancelled': 'badge',
+  // A type may report its own words over the engine's status (see registry displayStatus).
+  'Converted to Purchase Order': 'badge badge-available',
+  'Closed': 'badge',
 };
 
 export const statusBadge = (status) => STATUS_BADGES[status] || 'badge';
@@ -58,6 +61,17 @@ export function coerceInput(raw, type) {
   if (raw === '') return null;
   return raw;
 }
+
+/** Money, in the request's own currency. Falls back to a plain number for an unknown code. */
+export const fmtMoney = (value, currency = 'INR') => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '—';
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency, maximumFractionDigits: 2 }).format(n);
+  } catch {
+    return `${currency} ${n.toLocaleString()}`;
+  }
+};
 
 export const fmtDate = (value) => {
   if (!value) return '—';

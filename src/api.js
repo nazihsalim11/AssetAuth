@@ -299,8 +299,27 @@ export const api = {
   addRequestAttachment: (id, doc) => apiFetch(`/requests/${id}/attachments`, { method: 'POST', body: JSON.stringify(doc) }),
   replaceRequestAttachment: (id, attachmentId, doc) => apiFetch(`/requests/${id}/attachments/${attachmentId}`, { method: 'PUT', body: JSON.stringify(doc) }),
   deleteRequestAttachment: (id, attachmentId) => apiFetch(`/requests/${id}/attachments/${attachmentId}`, { method: 'DELETE' }),
+  // Revise what a request proposes — the requester only, and only before anyone approved it.
+  reviseRequest: (id, payload) => apiFetch(`/requests/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   // Bulk approve/reject/cancel. Reports per-id results — one failure does not sink the rest.
   bulkRequestAction: (action, payload) => apiFetch(`/requests/bulk/${action}`, { method: 'POST', body: JSON.stringify(payload) }),
+
+  // Configurable approval ladders. Type-agnostic like everything else here: a rule matches on
+  // request type, department, cost band, priority and category, and builds the ladder.
+  getApprovalRules: () => apiFetch('/requests/rules'),
+  createApprovalRule: (rule) => apiFetch('/requests/rules', { method: 'POST', body: JSON.stringify(rule) }),
+  updateApprovalRule: (id, rule) => apiFetch(`/requests/rules/${id}`, { method: 'PUT', body: JSON.stringify(rule) }),
+  deleteApprovalRule: (id) => apiFetch(`/requests/rules/${id}`, { method: 'DELETE' }),
+  previewApprovalRule: (context) => apiFetch('/requests/rules/preview', { method: 'POST', body: JSON.stringify(context) }),
+
+  /* ---------------------------------------------------- purchase requests */
+  // A purchase request is raised with createRequest({ requestType: 'purchase.request' }) —
+  // it is an ordinary request. Only what is genuinely specific to it lives here.
+  getPurchaseRequestOptions: () => apiFetch('/purchase-requests/options'),
+  convertPurchaseRequest: (id, payload = {}) =>
+    apiFetch(`/purchase-requests/${id}/convert`, { method: 'POST', body: JSON.stringify(payload) }),
+  closePurchaseRequest: (id, payload = {}) =>
+    apiFetch(`/purchase-requests/${id}/close`, { method: 'POST', body: JSON.stringify(payload) }),
 
   // Company letterhead, authorised signature and PO-number rule.
   getPoSettings: () => apiFetch('/po-settings'),

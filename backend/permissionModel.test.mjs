@@ -25,9 +25,9 @@ test('all requested modules are present', () => {
   const required = ['dashboard', 'assets', 'allocations', 'amc', 'finance', 'documents',
     'qr', 'reports', 'emails', 'tickets', 'sla', 'knowledge', 'userDirectory', 'userManagement',
     'departments', 'branches', 'categories', 'vendors', 'notificationSettings',
-    'systemSettings', 'auditLogs', 'requests'];
+    'systemSettings', 'auditLogs', 'requests', 'purchaseRequests'];
   for (const k of required) assert.ok(keys.includes(k), `missing module ${k}`);
-  assert.equal(model.MODULES.length, 22);
+  assert.equal(model.MODULES.length, 23);
 });
 
 test('requests is grantable and denies by default to roles with no grant', () => {
