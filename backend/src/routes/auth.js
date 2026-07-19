@@ -5,6 +5,27 @@ const emailChannel = require('../../notifications/channels/email');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/**
+ * Is this failure the request never completing, rather than WorkOS rejecting it?
+ *
+ * The WorkOS SDK turns an aborted request into an HTTP-shaped error with status 408 and
+ * message "Request timeout" — it is not a reply from WorkOS at all. A raw transport failure
+ * (DNS, reset connection, no route) arrives as a TypeError/system error with no status.
+ * Neither says anything about the user's password.
+ *
+ * Module-scoped and exported so the classification is unit-tested: getting it wrong tells a
+ * user with a perfectly good password that their credentials are invalid.
+ */
+function isTransportFailure(err) {
+  if (!err) return false;
+  const status = err.status ?? (err.response && err.response.status);
+  // 408 request timeout, 502/503/504 gateway, any 5xx — the request did not get an answer.
+  if (status === 408 || (status && status >= 500)) return true;
+  if (['AbortError', 'TimeoutError', 'FetchError', 'TypeError'].includes(err.name)) return true;
+  return ['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT']
+    .includes(err.code);
+}
+
 function register(app, { JWT_SECRET }) {
   const workosApiKey = process.env.WORKOS_API_KEY;
   const workosClientId = process.env.WORKOS_CLIENT_ID;
@@ -130,7 +151,9 @@ function register(app, { JWT_SECRET }) {
   // failures are deliberately generic so we never confirm whether an email exists.
   function respondAuthError(res, err) {
     const code = (err && (err.code || (err.rawData && err.rawData.code))) || null;
-    console.warn('[WorkOS Login] authentication failed:', code || err.message);
+    const status = err && (err.status ?? (err.response && err.response.status));
+    // Log the status too: "Request timeout" alone gives no clue whether WorkOS answered.
+    console.warn('[WorkOS Login] authentication failed:', code || err.message, status ? `(status ${status})` : '');
 
     if (code === 'email_verification_required') {
       return res.status(403).json({
@@ -144,14 +167,24 @@ function register(app, { JWT_SECRET }) {
         code: 'MFA_REQUIRED',
       });
     }
-    // A configuration problem (e.g. password auth disabled, bad client id) surfaces as a
-    // non-401 from WorkOS; distinguish it so it is not mislabelled as bad credentials.
-    if (err && err.status && err.status >= 500) {
-      return res.status(502).json({
-        error: 'The authentication service is temporarily unavailable. Please try again shortly.',
-        code: 'AUTH_SERVICE_ERROR',
+    // A request that never got an answer is not a wrong password. Telling the user their
+    // credentials are invalid during a network blip sends them to reset a password that
+    // was never wrong — and hides a real outage behind a login form.
+    if (isTransportFailure(err)) {
+      return res.status(503).json({
+        error: 'Could not reach the authentication service. This is not a problem with your password — please try again in a moment.',
+        code: 'AUTH_SERVICE_UNAVAILABLE',
       });
     }
+    // Rate limiting is also not a credential failure: the caller is being throttled, and
+    // "invalid password" would send them straight into a reset they do not need.
+    if (status === 429) {
+      return res.status(429).json({
+        error: 'Too many sign-in attempts. Please wait a moment and try again.',
+        code: 'RATE_LIMITED',
+      });
+    }
+    // Only a real rejection from WorkOS reaches here.
     return res.status(401).json({ error: 'Invalid email or password. Please try again.', code: 'INVALID_CREDENTIALS' });
   }
 
@@ -346,4 +379,4 @@ function register(app, { JWT_SECRET }) {
   });
 }
 
-module.exports = { register };
+module.exports = { register, isTransportFailure };
