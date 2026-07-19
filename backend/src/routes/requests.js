@@ -19,6 +19,7 @@
 const engine = require('../requests/engine');
 const registry = require('../requests/registry');
 const rules = require('../requests/rules');
+const permissionModel = require('../../permissionModel');
 const { cq } = require('../../convexApi');
 
 const send = (res, err, fallback) => {
@@ -122,7 +123,26 @@ function register(app, { requirePermission, roleCan }) {
     const user = await requirePermission(req, res, 'requests', 'view');
     if (!user) return;
     try {
-      res.json(await rules.list());
+      // The vocabulary rides along with the rules rather than living on /options, because
+      // only the rules screen needs it and /options is fetched on every page load. Shipping
+      // it from the server is what stops the editor offering a role or a department the
+      // matching engine would never recognise.
+      const [list, departments, categories] = await Promise.all([
+        rules.list(),
+        cq('masters:list', { table: 'departments' }),
+        cq('generic:list', { table: 'asset_subtypes' }),
+      ]);
+      res.json({
+        rules: list,
+        vocabulary: {
+          requestTypes: registry.catalog().map((t) => ({ key: t.key, label: t.label })),
+          roles: permissionModel.ROLES.map((r) => ({ key: r.key, label: r.label })),
+          departments: departments.filter((d) => d.is_active !== false).map((d) => d.name),
+          categories: [...new Set(categories.filter((c) => c.is_active !== false).map((c) => c.name))].sort(),
+          priorities: engine.PRIORITIES,
+          levelModes: engine.LEVEL_MODES,
+        },
+      });
     } catch (err) {
       send(res, err, 'Could not load approval rules');
     }

@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle, CheckCircle2, ClipboardList, Clock, Download, FileWarning, Inbox, Pencil,
-  Plus, RefreshCw, Search, Send, ShieldQuestion, ShoppingCart, Trash2, UserCog, XCircle
+  GitBranch, Plus, RefreshCw, Search, Send, ShieldQuestion, ShoppingCart, Trash2, UserCog,
+  XCircle
 } from 'lucide-react';
 import { api } from '../../api';
 import Modal from '../../Modal';
@@ -9,6 +10,7 @@ import CustomSelect from '../../CustomSelect';
 import Checkbox from '../../Checkbox';
 import { SpinnerButton } from '../../SpinnerButton';
 import { ApprovalTimeline, AttachmentList, AuditTimeline, CommentThread, DiffTable } from './RequestPieces';
+import ApprovalRulesModal from './ApprovalRulesModal';
 import PurchaseRequestForm from './PurchaseRequestForm';
 import PurchaseRequestPanel from './PurchaseRequestPanel';
 import { coerceInput, fmtDate, fmtDateTime, priorityBadge, statusBadge } from './requestUi';
@@ -69,6 +71,7 @@ export default function RequestsPage({ can, currentUser, addToast }) {
   const [openId, setOpenId] = useState(null);
   const [creating, setCreating] = useState(false);
   const [raisingPurchase, setRaisingPurchase] = useState(false);
+  const [editingRules, setEditingRules] = useState(false);
 
   const canApprove = can('requests', 'approve');
   const canManage = can('requests', 'manage');
@@ -218,6 +221,11 @@ export default function RequestsPage({ can, currentUser, addToast }) {
                 <Download size={14} /> Export
               </button>
             )}
+            {canManage && (
+              <button className="btn btn-secondary" onClick={() => setEditingRules(true)}>
+                <GitBranch size={14} /> Approval rules
+              </button>
+            )}
             {canCreate && (
               <button className="btn btn-secondary" onClick={() => setRaisingPurchase(true)}>
                 <ShoppingCart size={15} /> New purchase request
@@ -344,6 +352,10 @@ export default function RequestsPage({ can, currentUser, addToast }) {
           docTypes={options?.types.find((t) => t.key === PURCHASE_REQUEST)?.docTypes}
           addToast={addToast}
         />
+      )}
+
+      {editingRules && (
+        <ApprovalRulesModal onClose={() => setEditingRules(false)} addToast={addToast} />
       )}
 
       {raisingPurchase && (
